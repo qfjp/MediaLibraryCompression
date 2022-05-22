@@ -149,9 +149,10 @@ is_converted() {
     local ext
     f1Video="$(mediainfo --Output=JSON "$file1" \
         | jq '.media.track[] | select(.["@type"] == "Video")')"
-    if [ "$(echo "$f1Video" | jq -r '.Format')" != "HEVC" ]; then
+    if [ "$(echo "$f1Video" | jq -r '.Format' | head -n1)" != "HEVC" ]; then
         return 1
-    elif [ "$(echo "$f1Video" | jq -r '.CodecID')" != "hev1" ]; then
+    elif [ "$(echo "$f1Video" | jq -r '.CodecID' | head -n1)" != "hev1" ] \
+        && [ "$(echo "$f1Video" | jq -r '.CodecID' | head -n1)" != "hvc1" ]; then
         return 1
     fi
     ext="$(get_extension "${file1}")"
