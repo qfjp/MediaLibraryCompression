@@ -1,10 +1,4 @@
 #!/bin/bash
-#
-# Sort all movie files at or below this level in the filesystem tree
-# into 3 categories:
-#    * Files compressed using x264 (a.k.a. h264, avc)
-#    * Files compressed using x265 (a.k.a. h265, hevc)
-#    * Files compressed using some other codec (e.g. av1)
 
 export GAP="    "
 export DEBUG=0 # 0 is true
