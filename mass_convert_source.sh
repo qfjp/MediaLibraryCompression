@@ -189,7 +189,8 @@ contains_converted() {
     if ! is_video_file "${fname}"; then
         return 1
     fi
-    norm_fname="$(basename "$(change_extension "${fname}" "")")"
+    norm_fname="$(change_extension "${fname}" "")"
+    norm_fname="$(basename "${norm_fname//${COLLISION_SUFFIX}/}")"
     dir="$(dirname "${fname}")"
     while read -r other_fname; do
         norm_other_fname="$(change_extension "${other_fname}" "")"
