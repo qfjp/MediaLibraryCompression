@@ -1,8 +1,10 @@
 #!/bin/bash
 
-# TODO: Better handling of multiple jq objects of same .["@type"]
-#     Currently this is handled by only checking the results from the
-#     first object (.select.some.object | head -n1)
+# TODO:
+#  * Better handling of multiple jq objects of same .["@type"]
+#    Currently this is handled by only checking the results from the
+#    first object (.select.some.object | head -n1)
+#  * Trap handling/cleanup
 
 source "$(pwd)/mass_convert_source.sh"
 [ -e "${FFMPEG_LOG}" ] && rm "${FFMPEG_LOG}"
