@@ -40,7 +40,7 @@ while read -r fname; do
     new_name="$(change_extension "${fname}" mp4)"
     sup_name="$(change_extension "${fname}" en.sup)" # fname of bitmapped subtitles
     if is_converted "${fname}"; then
-        echo "${GAP}$(color_good ✔) Already compressed, skipping"
+        echo "${GAP}$(color_good ${CHECK}) Already compressed, skipping"
         continue
     elif [ "${vid_container}" = "MPEG-4" ]; then
         new_name="$(append_name "${fname}" "-compress")"
@@ -81,17 +81,17 @@ while read -r fname; do
 
     # Post-Processing (close progress bar, print info; delete?)
     if [ "${is_success}" -ne 0 ]; then
-        echo "${GAP}$(color_bad ✖) ffmpeg failed"
+        echo "${GAP}$(color_bad ${CROSS}) ffmpeg failed"
         delete_file "${new_name}"
         [ $DEBUG -ne 0 ] && continue # only continue if debug is off
     else
-        echo "${GAP}$(color_good ✔) ffmpeg succeeded"
+        echo "${GAP}$(color_good ${CHECK}) ffmpeg succeeded"
         output_to_file "${LOG}" "${new_name}"
     fi
     if verify_conversion "${fname}" "${new_name}"; then
-        echo "${GAP}$(color_good ✔) Metadata matches"
+        echo "${GAP}$(color_good ${CHECK}) Metadata matches"
     else
-        echo "${GAP}$(color_bad ✖) Metadata mismatch"
+        echo "${GAP}$(color_bad ${CROSS}) Metadata mismatch"
         [ $DEBUG -ne 0 ] && continue # only continue if debug is off
     fi
     delete_file "${fname}"
