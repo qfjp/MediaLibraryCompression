@@ -14,6 +14,9 @@ export FIND_FUNC="find . -type f"
 export BAR_SIZE=40
 export BIN_LOCATION="${HOME}/.trash"
 
+# Suffix while converting an mp4 video file, to avoid name collisions.
+export COLLISION_SUFFIX="-compress"
+
 if [ ${TRASH_BIN} -eq 0 ]; then
     if [ -e "${BIN_LOCATION}" ] && [ ! -d "${BIN_LOCATION}" ]; then
         echo "Trash bin exists, but is not a directory." >&2

@@ -45,7 +45,7 @@ while read -r fname; do
     elif contains_converted "${fname}"; then
         echo "${GAP}$(color_good ${CHECK}) Compressed exists, skipping"
     elif [ "${vid_container}" = "MPEG-4" ]; then
-        new_name="$(append_name "${fname}" "-compress")"
+        new_name="$(append_name "${fname}" "${COLLISION_SUFFIX}")"
         is_mp4=0
     fi
     ((num_processed += 1))
