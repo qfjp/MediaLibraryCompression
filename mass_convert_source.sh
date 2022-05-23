@@ -172,6 +172,45 @@ is_converted() {
     return 0
 }
 
+contains_converted() {
+    local fname="${1}"
+    local other_fname
+    local dir
+    local is_video=0
+    if ! is_video_file "${fname}"; then
+        echo "${GAP}Origin is not a video file, cannot compare metadata"
+        is_video=1
+    fi
+    if [ -d ${fname} ]; then
+        dir=${fname}
+    else
+        dir="$(dirname "${fname}")"
+    fi
+    while read other_fname; do
+        if [ "${fname}" = "${other_fname}" ]; then
+            continue
+        elif ! is_video_file "${other_fname}"; then
+            continue
+        elif ! is_converted "${other_fname}"; then
+            continue
+        elif [ "${is_video}" -ne 0 ]; then
+            if ! is_converted "${other_fname}"; then
+                continue
+            else
+                echo "${GAP}$(color_good ${CHECK}) Compressed file exists"
+                return 0
+            fi
+        elif verify_conversion "${fname}" "${other_fname}"; then
+            if is_video_file "${fname}"; then
+                echo "${GAP}$(color_good ${CHECK}) Metadata matches"
+                echo "${GAP}  Compression: $(find_compression_ratio ${fname} ${other_fname})"
+            fi
+            return 0
+        fi
+    done < <(find "${dir}" -maxdepth 1 -type f)
+    return 1
+}
+
 ## Verify that two media files contain the same content through an ffmpeg conversion.
 # Verification is done through several checks:
 #   - General
