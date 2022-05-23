@@ -93,13 +93,13 @@ while read -r fname; do
     if verify_conversion "${fname}" "${new_name}"; then
         echo "${GAP}$(color_good ${CHECK}) Metadata matches"
         echo "${GAP}  Compression: $(find_compression_ratio "${fname}" "${new_name}")"
+        delete_file "${fname}"
+        # If the old file is an mp4, move the new file to its place
+        [ ${is_mp4} -eq 0 ] && move_file "${new_name}" "${fname}"
     else
         echo "${GAP}$(color_bad ${CROSS}) Metadata mismatch"
         [ $DEBUG -ne 0 ] && continue # only continue if debug is off
     fi
-    delete_file "${fname}"
-    # If the old file is an mp4, move the new file to its place
-    [ ${is_mp4} -eq 0 ] && move_file "${new_name}" "${fname}"
     [ "${LIMIT_TO_NUM}" -gt 0 ] && [ ${num_processed} -ge ${tot_files} ] && break
     echo
 
