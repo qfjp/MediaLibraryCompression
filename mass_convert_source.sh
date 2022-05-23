@@ -154,7 +154,7 @@ draw_progress_bar() {
 }
 
 is_converted() {
-    local file1="$1"
+    local file1="${1}"
     local f1Video
     local ext
     f1Video="$(mediainfo --Output=JSON "$file1" \
