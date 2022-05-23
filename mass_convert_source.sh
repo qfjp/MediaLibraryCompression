@@ -211,6 +211,16 @@ contains_converted() {
     return 1
 }
 
+find_compression_ratio() {
+    local file1="${1}"
+    local file2="${2}"
+
+    f1size="$(du -b "${file1}" | cut -f1)"
+    f2size="$(du -b "${file2}" | cut -f1)"
+    percent="$(echo "print(\"{:.1%}\".format(${f2size}/${f1size}))" | python)"
+    echo ${percent}
+}
+
 ## Verify that two media files contain the same content through an ffmpeg conversion.
 # Verification is done through several checks:
 #   - General
