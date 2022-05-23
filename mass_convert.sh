@@ -92,6 +92,7 @@ while read -r fname; do
     fi
     if verify_conversion "${fname}" "${new_name}"; then
         echo "${GAP}$(color_good ${CHECK}) Metadata matches"
+        echo "${GAP}  Compression: $(find_compression_ratio ${fname} ${new_fname})"
     else
         echo "${GAP}$(color_bad ${CROSS}) Metadata mismatch"
         [ $DEBUG -ne 0 ] && continue # only continue if debug is off
