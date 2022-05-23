@@ -188,11 +188,6 @@ is_converted() {
 #       * Format
 #       * BitRate (and BR mode)
 #       * Num, Positions, and Layout of Channels
-# TODO: (notes)
-#   - number of streams can be achieved from
-#       * .media.track[] | select(.["@type" == "General"]).VideoCount
-#       * .media.track[] | select(.["@type" == "General"]).AudioCount
-#   - Duration is not exact, use TOLERANCE=0.1
 #
 # @param ${1} The original file
 # @param ${2} The converted file
