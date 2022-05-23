@@ -249,9 +249,6 @@ verify_conversion() {
     [ "$(echo "$f1Video" | jq -r '.ColorSpace' | head -n1)" != \
         "$(echo "$f2Video" | jq -r '.ColorSpace' | head -n1)" ] \
         && return 1
-    [ "$(echo "$f1Video" | jq -r '.ScanType' | head -n1)" != \
-        "$(echo "$f2Video" | jq -r '.ScanType' | head -n1)" ] \
-        && return 1
     [ "$(echo "$f2Video" | jq -r '.Format' | head -n1)" != "HEVC" ] && return 1
     [ "$(echo "$f2Video" | jq -r '.CodecID' | head -n1)" != "hev1" ] \
         && [ "$(echo "$f2Video" | jq -r '.CodecID' | head -n1)" != "hvc1" ] \
