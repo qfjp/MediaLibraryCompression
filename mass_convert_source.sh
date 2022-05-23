@@ -315,10 +315,6 @@ verify_conversion() {
     durationDiff=$(echo \
         "import math; print(math.fabs(${duration1} - ${duration2}) < $TOLERANCE)" \
         | python)
-    [ "$(echo "$f2Audio" | jq -r '.BitRate_Mode' | head -n1)" != \
-        "$(echo "$f2Audio" | jq -r '.BitRate_Mode' | head -n1)" ] && return 1
-    [ "$(echo "$f1Audio" | jq -r '.BitRate' | head -n1)" != \
-        "$(echo "$f2Audio" | jq -r '.BitRate' | head -n1)" ] && return 1
     [ "$(echo "$f1Audio" | jq -r '.ChannelPositions' | head -n1)" != \
         "$(echo "$f2Audio" | jq -r '.ChannelPositions' | head -n1)" ] && return 1
     [ "$(echo "$f1Audio" | jq -r '.ChannelLayout' | head -n1)" != \
