@@ -175,40 +175,38 @@ is_converted() {
     return 0
 }
 
+## Given a video file, checks the parent directory to see
+# if there is a compressed video file to match
+#
+# @param ${1} The name of the file to check. If this file is not a
+# video file, then this function returns false
 contains_converted() {
     local fname="${1}"
+    local norm_fname
     local other_fname
+    local norm_other_fname
     local dir
-    local is_video=0
     if ! is_video_file "${fname}"; then
-        echo "${GAP}Origin is not a video file, cannot compare metadata"
-        is_video=1
+        return 1
     fi
-    if [ -d "${fname}" ]; then
-        dir=${fname}
-    else
-        dir="$(dirname "${fname}")"
-    fi
+    norm_fname="$(basename "$(change_extension "${fname}" "")")"
+    dir="$(dirname "${fname}")"
     while read -r other_fname; do
+        norm_other_fname="$(change_extension "${other_fname}" "")"
+        norm_other_fname="$(basename "${norm_other_fname//${COLLISION_SUFFIX}/}")"
         if [ "${fname}" = "${other_fname}" ]; then
+            echo ppop
             continue
-        elif ! is_video_file "${other_fname}"; then
-            continue
-        elif ! is_converted "${other_fname}"; then
-            continue
-        elif [ "${is_video}" -ne 0 ]; then
-            if ! is_converted "${other_fname}"; then
+        elif [ "${norm_fname}" = "${norm_other_fname}" ]; then
+            if ! is_video_file "${other_fname}"; then
                 continue
-            else
-                echo "${GAP}$(color_good ${CHECK}) Compressed file exists"
-                return 0
-            fi
-        elif verify_conversion "${fname}" "${other_fname}"; then
-            if is_video_file "${fname}"; then
+            elif ! is_converted "${other_fname}"; then
+                continue
+            elif verify_conversion "${fname}" "${other_fname}"; then
                 echo "${GAP}$(color_good ${CHECK}) Metadata matches"
                 echo "${GAP}  Compression: $(find_compression_ratio "${fname}" "${other_fname}")"
+                return 0
             fi
-            return 0
         fi
     done < <(find "${dir}" -maxdepth 1 -type f)
     return 1
