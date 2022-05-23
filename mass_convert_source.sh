@@ -3,6 +3,7 @@
 export GAP="    "
 export DEBUG=0 # 0 is true
 export DRY_RUN=1
+export TRASH_BIN=1
 export SHOW_PROGRESS_BAR=1
 export LIMIT_TO_NUM=3
 
@@ -11,6 +12,17 @@ export FFMPEG_LOG=ffmpeg.log
 export ACTIVE=active.log # File storing the filename currently processing
 export FIND_FUNC="find . -type f"
 export BAR_SIZE=40
+export BIN_LOCATION="${HOME}/.trash"
+
+if [ ${TRASH_BIN} -eq 0 ]; then
+    if [ -e "${BIN_LOCATION}" ] && [ ! -d "${BIN_LOCATION}" ]; then
+        echo "Trash bin exists, but is not a directory." >&2
+        echo "Exiting." >&2
+        exit
+    elif [ ! -e "${BIN_LOCATION}" ]; then
+        mkdir "${BIN_LOCATION}"
+    fi
+fi
 
 export TOLERANCE=1
 
@@ -41,6 +53,10 @@ delete_file() {
     [ ! -e "${fname}" ] && return 0
     [ ${DEBUG} -eq 0 ] && echo "${GAP}rm \"${fname}\"" && return 0
     [ ${DRY_RUN} -eq 0 ] && return 0
+    if [ ${TRASH_BIN} -eq 0 ]; then
+        mv "${fname}" "${BIN_LOCATION}"
+        return $?
+    fi
     rm "${fname}"
 }
 
