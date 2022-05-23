@@ -181,12 +181,12 @@ contains_converted() {
         echo "${GAP}Origin is not a video file, cannot compare metadata"
         is_video=1
     fi
-    if [ -d ${fname} ]; then
+    if [ -d "${fname}" ]; then
         dir=${fname}
     else
         dir="$(dirname "${fname}")"
     fi
-    while read other_fname; do
+    while read -r other_fname; do
         if [ "${fname}" = "${other_fname}" ]; then
             continue
         elif ! is_video_file "${other_fname}"; then
@@ -203,7 +203,7 @@ contains_converted() {
         elif verify_conversion "${fname}" "${other_fname}"; then
             if is_video_file "${fname}"; then
                 echo "${GAP}$(color_good ${CHECK}) Metadata matches"
-                echo "${GAP}  Compression: $(find_compression_ratio ${fname} ${other_fname})"
+                echo "${GAP}  Compression: $(find_compression_ratio "${fname}" "${other_fname}")"
             fi
             return 0
         fi
@@ -218,7 +218,7 @@ find_compression_ratio() {
     f1size="$(du -b "${file1}" | cut -f1)"
     f2size="$(du -b "${file2}" | cut -f1)"
     percent="$(echo "print(\"{:.1%}\".format(${f2size}/${f1size}))" | python)"
-    echo ${percent}
+    echo "${percent}"
 }
 
 ## Verify that two media files contain the same content through an ffmpeg conversion.
