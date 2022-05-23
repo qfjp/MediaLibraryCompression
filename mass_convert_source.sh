@@ -195,7 +195,6 @@ contains_converted() {
         norm_other_fname="$(change_extension "${other_fname}" "")"
         norm_other_fname="$(basename "${norm_other_fname//${COLLISION_SUFFIX}/}")"
         if [ "${fname}" = "${other_fname}" ]; then
-            echo ppop
             continue
         elif [ "${norm_fname}" = "${norm_other_fname}" ]; then
             if ! is_video_file "${other_fname}"; then
