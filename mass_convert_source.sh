@@ -14,6 +14,7 @@ export ACTIVE=active${PID_SUFFIX}.log # File storing the filename currently proc
 export FIND_FUNC="find . -type f -regex '.*\(mkv\|mp4\)' -print0 | du -Sh --files0-from - | sort -hr | cut -f2"
 export BAR_SIZE=40
 export BIN_LOCATION="${HOME}/.trash"
+export INFO_JSON
 
 # Suffix while converting an mp4 video file, to avoid name collisions.
 export COLLISION_SUFFIX="-compress"
@@ -61,7 +62,11 @@ delete_file() {
         mv "${fname}" "${BIN_LOCATION}"
         return $?
     fi
-    rm "${fname}"
+    if is_mp4_x265 "${fname}"; then
+        echo "$(color_bad WARNING): ${fname} looks like a converted video file, not deleting!"
+    else
+        rm "${fname}"
+    fi
 }
 
 ## Move a file
@@ -157,23 +162,69 @@ draw_progress_bar() {
     echo -en "\r"
 }
 
-is_converted() {
-    local file1="${1}"
-    local f1Video
-    local ext
-    f1Video="$(mediainfo --Output=JSON "$file1" \
-        | jq '.media.track[] | select(.["@type"] == "Video")')"
-    if [ "$(echo "$f1Video" | jq -r '.Format' | head -n1)" != "HEVC" ]; then
-        return 1
-    elif [ "$(echo "$f1Video" | jq -r '.CodecID' | head -n1)" != "hev1" ] \
-        && [ "$(echo "$f1Video" | jq -r '.CodecID' | head -n1)" != "hvc1" ]; then
-        return 1
-    fi
-    ext="$(get_extension "${file1}")"
-    if [ "${ext}" != "mp4" ]; then
-        return 1
-    fi
+set_mediainfo() {
+    local fname="$1"
+    INFO_JSON="$(mediainfo --Output=JSON "${fname}")"
+}
+
+mediainfo_container() {
+    local fname="$1"
+    local info_json
+    local vid_container
+
+    info_json="$INFO_JSON"
+    vid_container="$(echo "${info_json}" \
+        | jq -r '.media.track[] | select(.["@type"] == "General").Format' \
+        | head -n1)"
+    echo "$vid_container"
+}
+
+mediainfo_codec() {
+    local fname="$1"
+    local info_json
+    local vid_codec
+    local vid_codec_id
+
+    info_json="$INFO_JSON"
+    vid_codec="$(echo "${info_json}" \
+        | jq -r '.media.track[] | select(.["@type"] == "Video").Format' | head -n1)"
+    vid_codec_id="$(echo "${info_json}" \
+        | jq -r '.media.track[] | select(.["@type"] == "Video").CodecID' | head -n1)"
+
+    echo "$vid_codec" "$vid_codec_id"
+}
+
+is_mp4_x265() {
+    local fname="${1}"
+    local container
+    local codec_codec_id
+    local codec
+    local codec_id
+    container="$(mediainfo_container "$fname")"
+    codec_codec_id="$(mediainfo_codec "${fname}")"
+    codec="${codec_codec_id%%' '*}"
+    codec_id="${codec_codec_id##*' '}"
+
+    [[ "$container" != "MPEG-4" ]] \
+        && {
+           [[ $codec != "HEVC" ]] \
+        || [[ "$codec_id" != "hev1" ]] \
+        || [[ "$codec_id" != "hvc1" ]] 
+    } && return 1
+
     return 0
+}
+
+name_to_convert_to() {
+    local fname="${1}"
+    local ext
+    local new_name
+
+    new_name="$(change_extension "${fname}" mp4)"
+    if [[ "$(mediainfo_container "${fname}")" = "MPEG-4" ]]; then
+        new_name="$(append_name "${fname}" "${COLLISION_SUFFIX}")"
+    fi
+    echo "$new_name"
 }
 
 ## Given a video file, checks the parent directory to see
@@ -201,7 +252,7 @@ contains_converted() {
         elif [ "${norm_fname}" = "${norm_other_fname}" ]; then
             if ! is_video_file "${other_fname}"; then
                 continue
-            elif ! is_converted "${other_fname}"; then
+            elif ! is_mp4_x265 "${other_fname}"; then
                 continue
             elif verify_conversion "${fname}" "${other_fname}"; then
                 echo "${GAP}$(color_good ${CHECK}) Metadata matches"

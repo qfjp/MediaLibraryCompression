@@ -6,61 +6,68 @@
 #    first object (.select.some.object | head -n1)
 #  * Trap handling/cleanup
 
-source "$(pwd)/mass_convert_source.sh"
-[ -e "${FFMPEG_LOG}" ] && rm "${FFMPEG_LOG}"
+RUN_DIR="$(dirname "$0")"
 
-tot_files="$(${FIND_FUNC} | wc -l)"
-if [ $LIMIT_TO_NUM -gt 0 ]; then
+source "${RUN_DIR}/mass_convert_source.sh"
+delete_file "${FFMPEG_LOG}"
+
+tot_files="$(eval "$FIND_FUNC" | wc -l)"
+if [ $LIMIT_TO_NUM -gt 0 ] && [ $LIMIT_TO_NUM -lt "$tot_files" ]; then
     tot_files="$LIMIT_TO_NUM"
 fi
 num_digits_in_tot_file="$(echo \
     "import math; print(1 + math.floor(math.log10($tot_files)))" | python)"
 num_processed=0
 while read -r fname; do
+    [ "${LIMIT_TO_NUM}" -gt 0 ] && [ ${num_processed} -ge ${tot_files} ] && break
+
+    # Verify the file hasn't been converted
+    set_mediainfo "$fname"
+    container="$(mediainfo_container "$fname")"
+    codec_codec_id="$(mediainfo_codec "${fname}")"
+    codec="${codec_codec_id%%' '*}"
+    codec_id="${codec_codec_id##*' '}"
+
+    [[ "$container" = "MPEG-4" ]] \
+        && [[ $codec = "HEVC" ]] \
+        && {
+        [[ "$codec_id" = "hev1" ]] \
+        || [[ "$codec_id" = "hvc1" ]]
+    } && continue
+    num_processed=$((num_processed += 1))
+
+    audio_codec="copy"
+
     [ "${num_processed}" -gt 0 ] && echo
     is_mp4=1
     # Pre-Processing (increment count, draw progress bar, ...)
-    if ! is_video_file "${fname}"; then
-        continue
-    fi
     printf "(%${num_digits_in_tot_file}d/%d) " "${num_processed}" "${tot_files}"
     echo "Processing $(basename "${fname}")"
     echo "${GAP}Dir: $(dirname "${fname}")"
-    [ -e ${ACTIVE} ] && rm "${ACTIVE}"
+    delete_file "${ACTIVE}"
     output_to_file "${ACTIVE}" "${fname}"
 
     # Processing (convert file)
-    info_json="$(mediainfo --Output=JSON "${fname}")"
-    vid_codec="$(echo "${info_json}" \
-        | jq -r '.media.track[] | select(.["@type"] == "Video").Format' | head -n1)"
-    vid_container="$(echo "${info_json}" \
-        | jq -r '.media.track[] | select(.["@type"] == "General").Format' \
-        | head -n1)"
-
-    new_name="$(change_extension "${fname}" mp4)"
     sup_name="$(change_extension "${fname}" en.sup)" # fname of bitmapped subtitles
-    if is_converted "${fname}"; then
-        echo "${GAP}$(color_good ${CHECK}) Already compressed, skipping"
+    new_name="$(name_to_convert_to "${fname}")"
+    delete_file "${new_name}"
+
+    if contains_converted "${fname}"; then
+        echo "${GAP}$(color_good ${CHECK}) Compressed (and verified) exists, skipping"
         continue
-    elif contains_converted "${fname}"; then
-        echo "${GAP}$(color_good ${CHECK}) Compressed exists, skipping"
-    elif [ "${vid_container}" = "MPEG-4" ]; then
-        new_name="$(append_name "${fname}" "${COLLISION_SUFFIX}")"
+    elif [[ "$(mediainfo_container "${fname}")" = "MPEG-4" ]]; then
+        audio_codec=ac3
         is_mp4=0
     fi
-    ((num_processed += 1))
 
     echo "${GAP}New file: ${new_name}"
 
     is_success=1
-    delete_file "${new_name}"
+    codec_codec_id="$(mediainfo_codec "${fname}")"
+    codec="${codec_codec_id%%' '*}"
+    codec_id="${codec_codec_id##*' '}"
     if [ "${DRY_RUN}" -eq 0 ]; then
         sleep 10 | pv && is_success=0
-    elif [ "${vid_codec}" = "HEVC" ]; then # If HEVC in the wrong container, copy everything
-        pv -F "${PV_FMT}" -w 72 "${fname}" \
-            | ffmpeg -i pipe: -strict -2 -map 0 -c copy -tag:v:0 hvc1 \
-                "${new_name}" 2>>"$FFMPEG_LOG" \
-            && is_success=0
     else
         pv -F "${PV_FMT}" -w 72 "${fname}" \
             | ffmpeg -i pipe: -strict -2 -map 0 -c:a copy -tag:v:0 hvc1 \
@@ -93,14 +100,15 @@ while read -r fname; do
     if verify_conversion "${fname}" "${new_name}"; then
         echo "${GAP}$(color_good ${CHECK}) Metadata matches"
         echo "${GAP}  Compression: $(find_compression_ratio "${fname}" "${new_name}")"
-        delete_file "${fname}"
+        echo "${GAP}  Deleting ${fname}"
+
+        # Delete original video
+        echo "delete_file \"${fname}\""
+
         # If the old file is an mp4, move the new file to its place
-        [ ${is_mp4} -eq 0 ] && move_file "${new_name}" "${fname}"
+        [ ${is_mp4} -eq 0 ] && echo "move_file \"${new_name}\" \"${fname}\""
     else
         echo "${GAP}$(color_bad ${CROSS}) Metadata mismatch"
         [ $DEBUG -ne 0 ] && continue # only continue if debug is off
     fi
-    [ "${LIMIT_TO_NUM}" -gt 0 ] && [ ${num_processed} -ge ${tot_files} ] && break
-    echo
-
-done < <(${FIND_FUNC} | sort)
+done < <(eval "$FIND_FUNC")
