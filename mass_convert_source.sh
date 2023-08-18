@@ -8,10 +8,10 @@ export LIMIT_TO_NUM=3
 export PID="$$"
 export PID_SUFFIX="_$PID"
 
-export FIND_FUNC="find . -type f"
 export LOG=conversions${PID_SUFFIX}.log
 export FFMPEG_LOG=ffmpeg${PID_SUFFIX}.log
 export ACTIVE=active${PID_SUFFIX}.log # File storing the filename currently processing
+export FIND_FUNC="find . -type f -regex '.*\(mkv\|mp4\)' -print0 | du -Sh --files0-from - | sort -hr | cut -f2"
 export BAR_SIZE=40
 export BIN_LOCATION="${HOME}/.trash"
 
