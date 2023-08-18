@@ -4,13 +4,14 @@ export GAP="    "
 export DEBUG=0 # 0 is true
 export DRY_RUN=1
 export TRASH_BIN=1
-export SHOW_PROGRESS_BAR=1
 export LIMIT_TO_NUM=3
+export PID="$$"
+export PID_SUFFIX="_$PID"
 
-export LOG=conversions.log
-export FFMPEG_LOG=ffmpeg.log
-export ACTIVE=active.log # File storing the filename currently processing
 export FIND_FUNC="find . -type f"
+export LOG=conversions${PID_SUFFIX}.log
+export FFMPEG_LOG=ffmpeg${PID_SUFFIX}.log
+export ACTIVE=active${PID_SUFFIX}.log # File storing the filename currently processing
 export BAR_SIZE=40
 export BIN_LOCATION="${HOME}/.trash"
 
@@ -27,7 +28,7 @@ if [ ${TRASH_BIN} -eq 0 ]; then
     fi
 fi
 
-export TOLERANCE=1
+export TOLERANCE=6
 
 export CROSS="✖"
 export CHECK="✔"
@@ -40,12 +41,12 @@ export PV_FMT="${GAP}%t %p %r %e"
 
 color_good() {
     local str="${*}"
-    echo -n "[1;32m${str}[0m"
+    echo -n "[0;32m${str}[0m"
 }
 
 color_bad() {
     local str="${*}"
-    echo -n "[1;31m${str}[0m"
+    echo -n "[0;31m${str}[0m"
 }
 
 ## Delete a file.
