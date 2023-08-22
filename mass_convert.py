@@ -11,10 +11,10 @@ import time
 import threading
 import subprocess as s
 
+from enum import Enum, auto
 from textwrap import TextWrapper
 
 import ffpb
-
 
 
 CODEC_ID_MAP = {
@@ -37,6 +37,24 @@ CHECK = "✔"
 GAP = "    "
 
 GEN_CACHE = dict()
+
+
+class StreamType(Enum):
+    General = auto()
+    Video = auto()
+    Audio = auto()
+    Text = auto()
+
+    def max_streams(self):
+        if self == StreamType.General:
+            return 1
+        else:
+            return None
+
+    def ffprobe_ident(self):
+        if self == StreamType.Text:
+            return "s"
+        return self.name[0].lower()
 
 
 ## A wrapper that causes a function's results to be memoized.
@@ -70,7 +88,7 @@ def cache(cache_dict=GEN_CACHE):
 
 
 @cache()
-def mediainfo(path: p.Path):
+def mediainfo(path: p.Path, typ: StreamType = None) -> list[dict[StreamProperty, str]]:
     if type(path) != p.PosixPath:
         raise (TypeError("mediainfo was passed an object that isn't a pathlib.Path"))
 
@@ -80,39 +98,15 @@ def mediainfo(path: p.Path):
     if mediainfo_err:
         raise (ValueError(mediainfo_err))
     file_json = json.loads(mediainfo_out)["media"]["track"]
-    return file_json
+    if typ == None:
+        return [file_json]
 
+    typ_json = list(filter(lambda obj: obj["@type"] == typ.name, file_json))
+    if typ == StreamType.General:
+        if len(typ_json) != 1:
+            raise RuntimeError(f"Number of '{typ}' objects in '{path}' is not one")
+    return typ_json
 
-@cache()
-def mediainfo_general(path: p.Path):
-    file_json = mediainfo(path)
-    gen_json = list(filter(lambda obj: obj["@type"] == "General", file_json))
-    if len(gen_json) != 1:
-        raise (Exception(f"Number of 'General' objects in {path} is not one."))
-    else:
-        gen_json = gen_json[0]
-    return gen_json
-
-
-@cache()
-def mediainfo_video(path: p.Path):
-    file_json = mediainfo(path)
-    vid_json = list(filter(lambda obj: obj["@type"] == "Video", file_json))
-    return vid_json
-
-
-@cache()
-def mediainfo_audio(path: p.Path):
-    file_json = mediainfo(path)
-    aud_json = list(filter(lambda obj: obj["@type"] == "Audio", file_json))
-    return aud_json
-
-
-@cache()
-def mediainfo_subtitle(path: p.Path):
-    file_json = mediainfo(path)
-    txt_json = list(filter(lambda obj: obj["@type"] == "Text", file_json))
-    return txt_json
 
 
 def color_green(str):
@@ -136,18 +130,18 @@ def verify_conversion(fname1: p.Path, fname2: p.Path) -> bool:
             )
         )
 
-    f1_general = mediainfo_general(fname1)
-    f2_general = mediainfo_general(fname2)
+    f1_general = mediainfo(fname1, StreamType.General)[0]
+    f2_general = mediainfo(fname2, StreamType.General)[0]
     general_pairs = [(f1_general, f2_general)]
 
-    f1_videos = mediainfo_video(fname1)
-    f2_videos = mediainfo_video(fname2)
+    f1_videos = mediainfo(fname1, StreamType.Video)
+    f2_videos = mediainfo(fname2, StreamType.Video)
     if len(f1_videos) != len(f2_videos):
         return False
     video_pairs = [(f1_videos[ix], f2_videos[ix]) for ix in range(len(f1_videos))]
 
-    f1_audios = mediainfo_audio(fname1)
-    f2_audios = mediainfo_audio(fname2)
+    f1_audios = mediainfo(fname1, StreamType.Audio)
+    f2_audios = mediainfo(fname2, StreamType.Audio)
     if len(f1_audios) != len(f2_audios):
         return False
     audio_pairs = [(f1_audios[ix], f2_audios[ix]) for ix in range(len(f1_audios))]
@@ -183,11 +177,11 @@ def get_converted_name(path: p.PosixPath) -> str:
 
 
 def is_mp4_x265(path: p.PosixPath):
-    gen_json = mediainfo_general(path)
+    gen_json = mediainfo(path, StreamType.General)[0]
     container = gen_json["Format"]
     if container != "MPEG-4":
         return False
-    vid_jsons = mediainfo_video(path)
+    vid_jsons = mediainfo(path, StreamType.Video)
     codecs = list(map(lambda obj: obj["Format"], vid_jsons))
     if any(map(lambda codec: codec != "HEVC", codecs)):
         return False
@@ -234,84 +228,102 @@ def is_mp4_x265(path: p.PosixPath):
 #
 # @returns A string to be passed to ffmpeg as arguments
 #
-def generate_sub_conversions(path: p.PosixPath) -> str:
-    text_json = mediainfo_subtitle(path)
+def generate_conversions(path: p.PosixPath, typ: StreamType, validate=False) -> str:
+    codec_ids = list(map(lambda typ_json: typ_json["CodecID"], mediainfo(path, typ)))
 
-    ## This will not grab text tracks that aren't in the first 200
-    ## packets
-    ffprobe_out = s.run(
-        [
-            "ffprobe",
-            "-loglevel",
-            "error",
-            "-read_intervals",
-            "0:00%+#200",
-            "-select_streams",
-            "s",
-            "-show_entries",
-            "packet=stream_index,duration",
-            "-of",
-            "csv",
-            path,
-        ],
-        capture_output=True,
-    )
-    ffprobe_stderr = ffprobe_out.stderr
-    if ffprobe_stderr:
-        raise (RuntimeError(f"ffprobe failure:\n{GAP}{ffprobe_stderr}"))
-    ffprobe_stdout = list(
-        filter(
-            lambda packet_lst: len(packet_lst) == 3,
-            list(
-                map(
-                    lambda packet_str: packet_str.split(","),
-                    ffprobe_out.stdout.decode("utf-8").split("\n"),
-                )
-            ),
+    counts = {
+        "Video": int(mediainfo(path, StreamType.General)[0]["VideoCount"]),
+        "Audio": int(mediainfo(path, StreamType.General)[0]["AudioCount"]),
+    }
+
+    if validate:
+        ## This will not grab tracks that aren't in the first 200
+        ## packets
+        ffprobe_out = s.run(
+            [
+                "ffprobe",
+                "-loglevel",
+                "error",
+                "-read_intervals",
+                "0:00%+#200",
+                "-select_streams",
+                typ.ffprobe_ident(),
+                "-show_entries",
+                "packet=stream_index,duration",
+                "-of",
+                "csv",
+                path,
+            ],
+            capture_output=True,
         )
-    )
-    all_stream_ixs = set(map(lambda packet_lst: int(packet_lst[1]), ffprobe_stdout))
-    invalid_ixs = set(
-        map(
-            lambda packet_lst: int(packet_lst[1]),
-            filter(lambda packet_lst: packet_lst[2] == "N/A", ffprobe_stdout),
+        ffprobe_stderr = ffprobe_out.stderr
+        if ffprobe_stderr:
+            raise (RuntimeError(f"ffprobe failure:\n{GAP}{ffprobe_stderr}"))
+        ffprobe_stdout = list(
+            filter(
+                lambda packet_lst: len(packet_lst) == 3,
+                list(
+                    map(
+                        lambda packet_str: packet_str.split(","),
+                        ffprobe_out.stdout.decode("utf-8").split("\n"),
+                    )
+                ),
+            )
         )
-    )
-    if len(all_stream_ixs) != len(mediainfo_subtitle(path)):
-        raise (IndexError("Not enough packets were used to search for subtitles"))
+        all_stream_ixs = set(map(lambda packet_lst: int(packet_lst[1]), ffprobe_stdout))
+        invalid_ixs = set(
+            map(
+                lambda packet_lst: int(packet_lst[1]),
+                filter(lambda packet_lst: packet_lst[2] == "N/A", ffprobe_stdout),
+            )
+        )
+    else:
+        invalid_ixs = []
+        offset = 0
+        for typ_key in counts.keys():
+            if typ.name == typ_key:
+                break
+            else:
+                offset += counts[typ_key]
+        all_stream_ixs = set(map(lambda ix: ix + offset, range(counts[typ.name])))
+
+    if len(all_stream_ixs) != len(mediainfo(path, typ)):
+        raise IndexError(f"Calculated stream indexes for type '{typ}' do not match the mediainfo output")
     all_stream_ixs_json = set(
-        map(lambda sub_json: int(sub_json["StreamOrder"]), mediainfo_subtitle(path))
+        map(lambda sub_json: int(sub_json["StreamOrder"]), mediainfo(path, typ))
     )
-    valid_stream_ixs = all_stream_ixs.difference(invalid_ixs)
     if all_stream_ixs != all_stream_ixs_json:
+        print(all_stream_ixs, all_stream_ixs_json)
         raise (
             ValueError(
-                "The subtitle indices found do not match those given by mediainfo"
+                f"The calculated '{typ}' indices found do not match those given by mediainfo"
             )
         )
 
-    vid_count = int(mediainfo_general(path)["VideoCount"])
-    aud_count = int(mediainfo_general(path)["AudioCount"])
-
-    type_ixs = [ix - vid_count - aud_count for ix in all_stream_ixs]
-    codec_ids = list(
-        map(lambda sub_json: sub_json["CodecID"], mediainfo_subtitle(path))
-    )
+    valid_stream_ixs = all_stream_ixs.difference(invalid_ixs)
 
     num_codecs_so_far = 0
     encoding_args = []
     for num_codecs_so_far, stream_ix in enumerate(valid_stream_ixs):
-        type_ix = stream_ix - vid_count - aud_count
+        offset = 0
+        for typ_key in counts:
+            if typ.name == typ_key:
+                break
+            else:
+                offset += counts[typ_key]
+        type_ix = stream_ix - offset
         codec_id = codec_ids[type_ix]
         encoding = None
         try:
             encoding = CODEC_ID_MAP[codec_id]
         except:
             encoding = CODEC_ID_MAP["subtitle"]
+
+        encode_key = typ.ffprobe_ident()
         encoding_args += [
             "-map",
-            f"0:s:{type_ix}",
-            f"-c:s:{num_codecs_so_far}",
+            f"0:{encode_key}:{type_ix}",
+            f"-c:{encode_key}:{num_codecs_so_far}",
             f"{encoding}",
         ]
     return encoding_args
@@ -346,7 +358,7 @@ def pprint_ffmpeg(path: p.Path) -> str:
 
 @cache()
 def ffmpeg_cmd(path: p.Path) -> list[str]:
-    video_tracks = mediainfo_video(path)
+    video_tracks = mediainfo(path, StreamType.Video)
     heights = set(map(lambda track: track["Height"], video_tracks))
     widths = set(map(lambda track: track["Width"], video_tracks))
 
@@ -355,12 +367,9 @@ def ffmpeg_cmd(path: p.Path) -> list[str]:
     height = heights.pop()
     width = widths.pop()
 
-    audio_codec_ids = map(lambda track: track["CodecID"], mediainfo_audio(path))
-    video_codec_ids = map(lambda track: track["CodecID"], mediainfo_audio(path))
-
-    audio_conversions = []
-    for ix, codec_id in enumerate(audio_codec_ids):
-        audio_conversions += ["-map", f"0:a:{ix}", f"-c:a:{ix}", CODEC_ID_MAP[codec_id]]
+    audio_codec_ids = map(
+        lambda track: track["CodecID"], mediainfo(path, StreamType.Audio)
+    )
 
     return (
         [
@@ -378,8 +387,8 @@ def ffmpeg_cmd(path: p.Path) -> list[str]:
             "-tag:v:0",
             "hvc1",
         ]
-        + audio_conversions
-        + generate_sub_conversions(path)
+        + generate_conversions(path, StreamType.Audio)
+        + generate_conversions(path, StreamType.Text, validate=True)
         + [str(get_converted_name(path))]
     )
 
@@ -393,15 +402,14 @@ def process_vidlist(vidlist: [p.PosixPath], limit=None) -> bool:
     for cur_path in vidlist:
         if num_processed > limit:
             return True
-        video_streams = mediainfo_video(cur_path)
+        video_streams = mediainfo(cur_path, StreamType.Video)
         video_formats = list(map(lambda stream: stream["Format"], video_streams))
         if is_mp4_x265(cur_path):
             continue
 
-        cur_json = mediainfo(cur_path)
         new_path = get_converted_name(cur_path)
-        audio_streams = mediainfo_audio(cur_path)
-        text_streams = mediainfo_subtitle(cur_path)
+        audio_streams = mediainfo(cur_path, StreamType.Audio)
+        text_streams = mediainfo(cur_path, StreamType.Text)
         format_string = "({:" + f"{limit_digits}d" + "}/{:d}) Processing {}"
 
         print(format_string.format(num_processed, limit, cur_path.name))
