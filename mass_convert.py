@@ -544,7 +544,7 @@ def process_vidlist(vidlist: [p.PosixPath], limit=None) -> bool:
         if verify_conversion(cur_path, new_path):
             compression = find_compression_ratio(cur_path, new_path)
             print(f"{GAP}{color_green(CHECK)} Metadata matches")
-            print(f"{GAP}  Compression: {human_readable(compression)}")
+            print(f"{GAP}  Compression: {compression}%")
             print("os.replace(new_path, cur_path)")
         else:
             print(f"{GAP}{color_red(CROSS)} Metadata mismatch")
@@ -564,7 +564,7 @@ def human_readable(num, suffix="B"):
 def find_compression_ratio(f1, f2):
     f1_size = os.path.getsize(f1)
     f2_size = os.path.getsize(f2)
-    return 100 * f1_size / f2_size
+    return 100 * f2_size / f1_size
 
 
 def main():
