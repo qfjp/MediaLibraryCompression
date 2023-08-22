@@ -1,19 +1,20 @@
 #!/bin/python
+import json
+import math
 import os
+import pathlib as p
+import re
 import shutil
 import sys
 import textwrap
 import time
 import threading
+import subprocess as s
+
 from textwrap import TextWrapper
-import pathlib as p
-import subprocess
-from subprocess import PIPE, STDOUT
-import json
-import math
-import re
-from enum import Enum
+
 import ffpb
+
 
 
 CODEC_ID_MAP = {
@@ -27,48 +28,13 @@ CODEC_ID_MAP = {
 }
 
 
-class progress_bar_loading(threading.Thread):
-    def run(self):
-        global stop
-        global kill
-        print("Loading.... ")
-        sys.stdout.flush()
-        i = 0
-        while stop != True:
-            if (i % 4) == 0:
-                sys.stdout.write("\b/")
-            elif (i % 4) == 1:
-                sys.stdout.write("\b-")
-            elif (i % 4) == 2:
-                sys.stdout.write("\b\\")
-            elif (i % 4) == 3:
-                sys.stdout.write("\b|")
-            sys.stdout.flush()
-            time.sleep(0.2)
-            i += 1
-
-        if kill == True:
-            print("\b\b\b\b Abort!")
-        else:
-            print("\b\b\b Done!")
-
-
 DEBUG = False
 
-TRASH_BIN = False
-LIMIT_TO_NUM = False
-LOG_FILE = "conversions.log"
-ALOG = "attempted_conversions.log"
-FFMPEG_LOG = "ffmpeg.log"
-# FIND_FUNC = ["find", ".", "-type", "f", "-regex", ".*\(mkv\|mp4\)", "-print0"]
-BIN_LOCATION = os.environ["HOME"]
 COLLISION_SUFFIX = "-compress"
 TOLERANCE = 6
 CROSS = "✖"
 CHECK = "✔"
 GAP = "    "
-PV_FMT = "%t %p %r %e"
-TEXT_SUBTITLE_IDS = ["tx3g", "S_TEXT/UTF8"]
 
 GEN_CACHE = dict()
 
@@ -108,7 +74,7 @@ def mediainfo(path: p.Path):
     if type(path) != p.PosixPath:
         raise (TypeError("mediainfo was passed an object that isn't a pathlib.Path"))
 
-    proc_out = subprocess.run(["mediainfo", "--Output=JSON", path], capture_output=True)
+    proc_out = s.run(["mediainfo", "--Output=JSON", path], capture_output=True)
     mediainfo_out = proc_out.stdout
     mediainfo_err = proc_out.stderr
     if mediainfo_err:
@@ -204,52 +170,6 @@ def verify_conversion(fname1: p.Path, fname2: p.Path) -> bool:
     )
 
 
-## Has caused problems in the past
-# [ "$(echo "${f1Video}" | jq -r '.Height' | head -n1)" \
-#    -ne "$(echo "${f2Video}" | jq -r '.Height' | head -n1)" ] \
-#    && return 1
-
-# [ "$(echo "${f1Video}" | jq -r '.Width' | head -n1)" \
-#    -ne "$(echo "${f2Video}" | jq -r '.Width' | head -n1)" ] \
-#    && return 1
-# [ "$(echo "${f1Video}" | jq -r '.ColorSpace' | head -n1)" != \
-#    "$(echo "${f2Video}" | jq -r '.ColorSpace' | head -n1)" ] \
-#    && return 1
-# [ "$(echo "${f2Video}" | jq -r '.Format' | head -n1)" != "HEVC" ] && return 1
-# [ "$(echo "${f2Video}" | jq -r '.CodecID' | head -n1)" != "hev1" ] \
-#    && [ "$(echo "${f2Video}" | jq -r '.CodecID' | head -n1)" != "hvc1" ] \
-#    && return 1
-# [ "${durationDiff}" -eq 0 ] && return 1
-# [ "${aspectRatio}" -eq 0 ] && return 1
-
-# f1Audio="$(echo "${f1_json}" \
-#    | jq '.media.track[] | select(.["@type"] == "Audio")')"
-# f2Audio="$(echo "${f2_json}" \
-#    | jq '.media.track[] | select(.["@type"] == "Audio")')"
-# duration1="$(echo "${f1Audio}" | jq -r '.Duration' | head -n1)"
-# duration2="$(echo "${f2Audio}" | jq -r '.Duration' | head -n1)"
-# durationDiff="$(bc << HERE
-# $BC_PREFIX
-# abs(${duration1} - ${duration2}) < $TOLERANCE
-# HERE#
-# )"
-
-## Has caused problems in the past
-##  instead, count tokens in ChannelLayout
-##[ "$(echo "${f1Audio}" | jq -r '.ChannelPositions' | head -n1)" != \
-##    "$(echo "${f2Audio}" | jq -r '.ChannelPositions' | head -n1)" ] && return 1
-##[ "$(echo "${f1Audio}" | jq -r '.ChannelLayout' | head -n1)" != \
-##    "$(echo "${f2Audio}" | jq -r '.ChannelLayout' | head -n1)" ] && return 1
-
-##[ "$(echo "${f1Audio}" | jq -r '.Format' | head -n1)" != \
-##    "$(echo "${f2Audio}" | jq -r '.Format' | head -n1)" ] && return 1
-# [ "${durationDiff}" -eq 0 ] && return 1
-
-# return 0
-
-## TODO: Multiple audio or video tracks?
-
-
 def change_ext(path: p.PosixPath, new_ext: str) -> str:
     return path.with_name(path.stem + "." + new_ext)
 
@@ -292,6 +212,8 @@ def is_mp4_x265(path: p.PosixPath):
 # Get all objects with @type text, pull their @typeorder and
 # CodecID. Subtract 1 from @typeorder. Then, if CodecID is
 # S_TEXT/UTF8 use mov_text, otherwise dvdsub:
+#
+#   =========================================
 #   Example
 #     {
 #       "@type": "Text",
@@ -310,24 +232,14 @@ def is_mp4_x265(path: p.PosixPath):
 #
 #     ffmpeg ... -map 0:s:4 -c:s:4 mov_text ...
 #
-# Valid *Stream* Indexes (called StreamOrder by mediainfo) can be
-# found with:
-#
-#   declare -a valid_stream_indices
-#   mapfile -t valid_stream_indices < <( \
-#       ffprobe -loglevel error -select_streams s \
-#         -show_entries packet=stream_index,duration \
-#         -of csv $fname \
-#     | grep -v 'N/A' \
-#     | cut -d, -f2 | sort -h | uniq \
-#   )
-#
 # @returns A string to be passed to ffmpeg as arguments
 #
 def generate_sub_conversions(path: p.PosixPath) -> str:
     text_json = mediainfo_subtitle(path)
 
-    ffprobe_out = subprocess.run(
+    ## This will not grab text tracks that aren't in the first 200
+    ## packets
+    ffprobe_out = s.run(
         [
             "ffprobe",
             "-loglevel",
@@ -404,23 +316,6 @@ def generate_sub_conversions(path: p.PosixPath) -> str:
         ]
     return encoding_args
 
-    ## This will not grab text tracks that aren't in the first 200
-    ## packets
-
-    # num_codecs_so_far=0
-    # next_valid_ix=${valid_stream_ixs[0]}
-    # [ -z "$next_valid_ix" ] && return 0
-    # for ((ix = 0; ix < ${#stream_ixs[@]}; ix++)); do
-    #    [ -z "$next_valid_ix" ] && break
-    #    [ "${stream_ixs[$ix]}" -ne "$next_valid_ix" ] && continue
-    #    type_ix=$((type_ixs[ix]))
-    #    codec="${codec_ids[$ix]}"
-    #    echo -n " -map 0:s:$type_ix -c:s:$num_codecs_so_far "
-    #    [ "${codec:0:6}" = S_TEXT -o "${codec}" = "tx3g" ] && echo -n "mov_text" || echo -n dvdsub
-    #    num_codecs_so_far=$((num_codecs_so_far + 1))
-    #    next_valid_ix=${valid_stream_ixs[$num_codecs_so_far]}
-    # done
-
 
 def pprint_ffmpeg(path: p.Path) -> str:
     lst = ffmpeg_cmd(path).copy()
@@ -430,7 +325,10 @@ def pprint_ffmpeg(path: p.Path) -> str:
 
     def write_to_width(lst, initial_indent="", subsequent_indent=GAP):
         wrapper = TextWrapper(
-            initial_indent=initial_indent, break_long_words=False, width=72, subsequent_indent=subsequent_indent
+            initial_indent=initial_indent,
+            break_long_words=False,
+            width=72,
+            subsequent_indent=subsequent_indent,
         )
         cmd = []
         for line in " ".join(map(str, lst)).splitlines(True):
@@ -438,7 +336,12 @@ def pprint_ffmpeg(path: p.Path) -> str:
             cmd += lst
         return cmd
 
-    return (write_to_width(lst[0:4]) + [f"{GAP}{GAP}{lst[4]} \\"] + write_to_width(lst[5:-1], GAP + GAP, GAP + GAP) + [f"{GAP}{GAP}{lst[-1]}"])
+    return (
+        write_to_width(lst[0:4])
+        + [f"{GAP}{GAP}{lst[4]} \\"]
+        + write_to_width(lst[5:-1], GAP + GAP, GAP + GAP)
+        + [f"{GAP}{GAP}{lst[-1]}"]
+    )
 
 
 @cache()
@@ -466,7 +369,6 @@ def ffmpeg_cmd(path: p.Path) -> list[str]:
             f"{height}x{width}",
             "-i",
             f"{path}",
-            # "pipe:",
             "-strict",
             "-2",
             "-map",
@@ -506,41 +408,14 @@ def process_vidlist(vidlist: [p.PosixPath], limit=None) -> bool:
         print(f"{GAP}Dir: {cur_path.parent}")
         print(f"{GAP}New file: {new_path}")
         print()
-        pv_proc_str = [GAP, "pv", "-F", '"' + PV_FMT +'"', "-w", "72", '"' + str(cur_path) + '"']
         ffmpeg_pretty_proc_str = pprint_ffmpeg(cur_path)
         ffmpeg_proc_str = ffmpeg_cmd(cur_path)
 
-        # Fix pipe
-        #ffmpeg_pretty_proc_str[0] = ffmpeg_proc_str[0][:-1] + "pipe: \\"
-        #ffmpeg_pretty_proc_str.pop(1)
-        #ffmpeg_proc_str[4] = "pipe:"
-        #ffmpeg_proc_str[4] = '"' + ffmpeg_proc_str[4] + '"'
-        #ffmpeg_proc_str[-1] = '"' + ffmpeg_proc_str[-1] +'"'
-
-        #pretty_proc_str = " ".join(pv_proc_str) + f"\\ \n{GAP}{GAP}| " + "\n".join(ffmpeg_pretty_proc_str)
-        #full_proc_str = " ".join(pv_proc_str) + f" | " + " ".join(ffmpeg_proc_str) + " 2>/dev/null"
         pretty_proc_str = f"{GAP}" + "\n".join(ffmpeg_pretty_proc_str)
-        #full_proc_str = " ".join(ffmpeg_proc_str) + " 2>/dev/null"
         print(pretty_proc_str)
         print()
-        #print(ffmpeg_proc_str)
         ffpb.main(argv=ffmpeg_proc_str[1:], stream=sys.stderr)
-        #subprocess.call(full_proc_str, shell=True)
 
-        #def ffmpeg_call():
-        #    subprocess.run(ffmpeg_cmd(cur_path))
-
-        #kill = False
-        #stop = False
-        #try:
-        #    ffmpeg_call()
-        #    time.sleep(1)
-        #    stop = True
-        #except KeyboardInterrupt or EOFError:
-        #    kill = True
-        #    stop = True
-
-        # verify_conversion(cur_path, new_path)
         if verify_conversion(cur_path, new_path):
             compression = find_compression_ratio(cur_path, new_path)
             print(f"{GAP}{color_green(CHECK)} Metadata matches")
