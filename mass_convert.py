@@ -44,6 +44,7 @@ class StreamType(Enum):
     Video = auto()
     Audio = auto()
     Text = auto()
+    Menu = auto()
 
     def max_streams(self):
         if self == StreamType.General:
@@ -191,6 +192,66 @@ def is_mp4_x265(path: p.PosixPath):
     return True
 
 
+def validate_conversions(path: p.Path, typ: StreamType, num_packets=200):
+    ## This will not grab tracks that aren't in the first `num_packets`
+    ## packets
+    ffprobe_out = s.run(
+        [
+            "ffprobe",
+            "-loglevel",
+            "error",
+            "-read_intervals",
+            "0:00%+#" + str(num_packets),
+            "-select_streams",
+            typ.ffprobe_ident(),
+            "-show_entries",
+            "packet=stream_index,duration",
+            "-of",
+            "csv",
+            path,
+        ],
+        capture_output=True,
+    )
+    ffprobe_stderr = ffprobe_out.stderr
+    if ffprobe_stderr:
+        raise (RuntimeError(f"ffprobe failure:\n{GAP}{ffprobe_stderr}"))
+    ffprobe_stdout = list(
+        filter(
+            lambda packet_lst: len(packet_lst) == 3,
+            list(
+                map(
+                    lambda packet_str: packet_str.split(","),
+                    ffprobe_out.stdout.decode("utf-8").split("\n"),
+                )
+            ),
+        )
+    )
+    all_stream_ixs = set(map(lambda packet_lst: int(packet_lst[1]), ffprobe_stdout))
+    invalid_ixs = set(
+        map(
+            lambda packet_lst: int(packet_lst[1]),
+            filter(lambda packet_lst: packet_lst[2] == "N/A", ffprobe_stdout),
+        )
+    )
+    return (all_stream_ixs, invalid_ixs)
+
+
+def get_stream_ix_offset(path: p.Path, typ: StreamType):
+    counts = {
+        "Video": int(mediainfo(path, StreamType.General)[0]["VideoCount"]),
+        "Audio": int(mediainfo(path, StreamType.General)[0]["AudioCount"]),
+    }
+
+    offset = 0
+    for typ_key in counts.keys():
+        if typ.name == typ_key:
+            break
+        else:
+            offset += counts[typ_key]
+
+    return offset
+
+
 ## Given a file, generate the ffmpeg string to convert all subtitles
 #  appropriately.
 #
@@ -229,71 +290,34 @@ def is_mp4_x265(path: p.PosixPath):
 # @returns A string to be passed to ffmpeg as arguments
 #
 def generate_conversions(path: p.PosixPath, typ: StreamType, validate=False) -> str:
+    num_frames = 200
     codec_ids = list(map(lambda typ_json: typ_json["CodecID"], mediainfo(path, typ)))
 
-    counts = {
-        "Video": int(mediainfo(path, StreamType.General)[0]["VideoCount"]),
-        "Audio": int(mediainfo(path, StreamType.General)[0]["AudioCount"]),
-    }
-
+    offset = get_stream_ix_offset(path, typ)
     if validate:
-        ## This will not grab tracks that aren't in the first 200
-        ## packets
-        ffprobe_out = s.run(
-            [
-                "ffprobe",
-                "-loglevel",
-                "error",
-                "-read_intervals",
-                "0:00%+#200",
-                "-select_streams",
-                typ.ffprobe_ident(),
-                "-show_entries",
-                "packet=stream_index,duration",
-                "-of",
-                "csv",
-                path,
-            ],
-            capture_output=True,
-        )
-        ffprobe_stderr = ffprobe_out.stderr
-        if ffprobe_stderr:
-            raise (RuntimeError(f"ffprobe failure:\n{GAP}{ffprobe_stderr}"))
-        ffprobe_stdout = list(
-            filter(
-                lambda packet_lst: len(packet_lst) == 3,
-                list(
-                    map(
-                        lambda packet_str: packet_str.split(","),
-                        ffprobe_out.stdout.decode("utf-8").split("\n"),
-                    )
-                ),
-            )
-        )
-        all_stream_ixs = set(map(lambda packet_lst: int(packet_lst[1]), ffprobe_stdout))
-        invalid_ixs = set(
-            map(
-                lambda packet_lst: int(packet_lst[1]),
-                filter(lambda packet_lst: packet_lst[2] == "N/A", ffprobe_stdout),
-            )
-        )
+        all_stream_ixs, invalid_ixs = validate_conversions(path, typ, num_packets=num_frames)
     else:
         invalid_ixs = []
-        offset = 0
-        for typ_key in counts.keys():
-            if typ.name == typ_key:
-                break
-            else:
-                offset += counts[typ_key]
-        all_stream_ixs = set(map(lambda ix: ix + offset, range(counts[typ.name])))
+        all_stream_ixs = set([i + offset for i, _ in enumerate(codec_ids)])
 
-    if len(all_stream_ixs) != len(mediainfo(path, typ)):
-        raise IndexError(f"Calculated stream indexes for type '{typ}' do not match the mediainfo output")
+    # If 200 packets is too small, keep tryin'
+    more_frames = False
+    while len(all_stream_ixs) != len(mediainfo(path, typ)):
+        num_frames *= 2
+        if not more_frames:
+            print(f"{GAP}{GAP}Calculated stream indexes ({len(all_stream_ixs)}) for type '{typ}'")
+            print(f"{GAP}{GAP}do not match the mediainfo output ({len(mediainfo(path, typ))})")
+        if not validate:
+            raise AssertionError(f"{GAP}validate is false, something terrible has happened")
+        sys.stdout.write(f"{GAP}{GAP}Searching {num_frames} initial frames for streams -> ")
+        all_stream_ixs, invalid_ixs = validate_conversions(path, typ, num_packets=num_frames)
+        print(len(all_stream_ixs))
+        more_frames = True
+
     all_stream_ixs_json = set(
         map(lambda sub_json: int(sub_json["StreamOrder"]), mediainfo(path, typ))
     )
     if all_stream_ixs != all_stream_ixs_json:
-        print(all_stream_ixs, all_stream_ixs_json)
         raise (
             ValueError(
                 f"The calculated '{typ}' indices found do not match those given by mediainfo"
@@ -305,19 +329,10 @@ def generate_conversions(path: p.PosixPath, typ: StreamType, validate=False) -> 
     num_codecs_so_far = 0
     encoding_args = []
     for num_codecs_so_far, stream_ix in enumerate(valid_stream_ixs):
-        offset = 0
-        for typ_key in counts:
-            if typ.name == typ_key:
-                break
-            else:
-                offset += counts[typ_key]
         type_ix = stream_ix - offset
         codec_id = codec_ids[type_ix]
         encoding = None
-        try:
-            encoding = CODEC_ID_MAP[codec_id]
-        except:
-            encoding = CODEC_ID_MAP["subtitle"]
+        encoding = CODEC_ID_MAP[codec_id]
 
         encode_key = typ.ffprobe_ident()
         encoding_args += [
@@ -380,13 +395,8 @@ def ffmpeg_cmd(path: p.Path) -> list[str]:
             f"{path}",
             "-strict",
             "-2",
-            "-map",
-            "0:v",
-            "-c:v",
-            "libx265",
-            "-tag:v:0",
-            "hvc1",
         ]
+        + generate_conversions(path, StreamType.Video)
         + generate_conversions(path, StreamType.Audio)
         + generate_conversions(path, StreamType.Text, validate=True)
         + [str(get_converted_name(path))]
