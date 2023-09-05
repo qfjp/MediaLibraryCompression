@@ -1,18 +1,19 @@
 #!/bin/python
+import json
+import math
 import os
+import pathlib as p
+import re
 import shutil
 import sys
 import textwrap
 import time
 import threading
+import subprocess as s
+
+from enum import Enum, auto
 from textwrap import TextWrapper
-import pathlib as p
-import subprocess
-from subprocess import PIPE, STDOUT
-import json
-import math
-import re
-from enum import Enum
+
 import ffpb
 
 
@@ -27,50 +28,34 @@ CODEC_ID_MAP = {
 }
 
 
-class progress_bar_loading(threading.Thread):
-    def run(self):
-        global stop
-        global kill
-        print("Loading.... ")
-        sys.stdout.flush()
-        i = 0
-        while stop != True:
-            if (i % 4) == 0:
-                sys.stdout.write("\b/")
-            elif (i % 4) == 1:
-                sys.stdout.write("\b-")
-            elif (i % 4) == 2:
-                sys.stdout.write("\b\\")
-            elif (i % 4) == 3:
-                sys.stdout.write("\b|")
-            sys.stdout.flush()
-            time.sleep(0.2)
-            i += 1
-
-        if kill == True:
-            print("\b\b\b\b Abort!")
-        else:
-            print("\b\b\b Done!")
-
-
 DEBUG = False
 
-TRASH_BIN = False
-LIMIT_TO_NUM = False
-LOG_FILE = "conversions.log"
-ALOG = "attempted_conversions.log"
-FFMPEG_LOG = "ffmpeg.log"
-# FIND_FUNC = ["find", ".", "-type", "f", "-regex", ".*\(mkv\|mp4\)", "-print0"]
-BIN_LOCATION = os.environ["HOME"]
 COLLISION_SUFFIX = "-compress"
 TOLERANCE = 6
 CROSS = "✖"
 CHECK = "✔"
 GAP = "    "
-PV_FMT = "%t %p %r %e"
-TEXT_SUBTITLE_IDS = ["tx3g", "S_TEXT/UTF8"]
 
 GEN_CACHE = dict()
+
+
+class StreamType(Enum):
+    General = auto()
+    Video = auto()
+    Audio = auto()
+    Text = auto()
+    Menu = auto()
+
+    def max_streams(self):
+        if self == StreamType.General:
+            return 1
+        else:
+            return None
+
+    def ffprobe_ident(self):
+        if self == StreamType.Text:
+            return "s"
+        return self.name[0].lower()
 
 
 ## A wrapper that causes a function's results to be memoized.
@@ -104,49 +89,25 @@ def cache(cache_dict=GEN_CACHE):
 
 
 @cache()
-def mediainfo(path: p.Path):
+def mediainfo(path: p.Path, typ: StreamType = None) -> list[dict[StreamProperty, str]]:
     if type(path) != p.PosixPath:
         raise (TypeError("mediainfo was passed an object that isn't a pathlib.Path"))
 
-    proc_out = subprocess.run(["mediainfo", "--Output=JSON", path], capture_output=True)
+    proc_out = s.run(["mediainfo", "--Output=JSON", path], capture_output=True)
     mediainfo_out = proc_out.stdout
     mediainfo_err = proc_out.stderr
     if mediainfo_err:
         raise (ValueError(mediainfo_err))
     file_json = json.loads(mediainfo_out)["media"]["track"]
-    return file_json
+    if typ == None:
+        return [file_json]
 
+    typ_json = list(filter(lambda obj: obj["@type"] == typ.name, file_json))
+    if typ == StreamType.General:
+        if len(typ_json) != 1:
+            raise RuntimeError(f"Number of '{typ}' objects in '{path}' is not one")
+    return typ_json
 
-@cache()
-def mediainfo_general(path: p.Path):
-    file_json = mediainfo(path)
-    gen_json = list(filter(lambda obj: obj["@type"] == "General", file_json))
-    if len(gen_json) != 1:
-        raise (Exception(f"Number of 'General' objects in {path} is not one."))
-    else:
-        gen_json = gen_json[0]
-    return gen_json
-
-
-@cache()
-def mediainfo_video(path: p.Path):
-    file_json = mediainfo(path)
-    vid_json = list(filter(lambda obj: obj["@type"] == "Video", file_json))
-    return vid_json
-
-
-@cache()
-def mediainfo_audio(path: p.Path):
-    file_json = mediainfo(path)
-    aud_json = list(filter(lambda obj: obj["@type"] == "Audio", file_json))
-    return aud_json
-
-
-@cache()
-def mediainfo_subtitle(path: p.Path):
-    file_json = mediainfo(path)
-    txt_json = list(filter(lambda obj: obj["@type"] == "Text", file_json))
-    return txt_json
 
 
 def color_green(str):
@@ -170,18 +131,18 @@ def verify_conversion(fname1: p.Path, fname2: p.Path) -> bool:
             )
         )
 
-    f1_general = mediainfo_general(fname1)
-    f2_general = mediainfo_general(fname2)
+    f1_general = mediainfo(fname1, StreamType.General)[0]
+    f2_general = mediainfo(fname2, StreamType.General)[0]
     general_pairs = [(f1_general, f2_general)]
 
-    f1_videos = mediainfo_video(fname1)
-    f2_videos = mediainfo_video(fname2)
+    f1_videos = mediainfo(fname1, StreamType.Video)
+    f2_videos = mediainfo(fname2, StreamType.Video)
     if len(f1_videos) != len(f2_videos):
         return False
     video_pairs = [(f1_videos[ix], f2_videos[ix]) for ix in range(len(f1_videos))]
 
-    f1_audios = mediainfo_audio(fname1)
-    f2_audios = mediainfo_audio(fname2)
+    f1_audios = mediainfo(fname1, StreamType.Audio)
+    f2_audios = mediainfo(fname2, StreamType.Audio)
     if len(f1_audios) != len(f2_audios):
         return False
     audio_pairs = [(f1_audios[ix], f2_audios[ix]) for ix in range(len(f1_audios))]
@@ -204,52 +165,6 @@ def verify_conversion(fname1: p.Path, fname2: p.Path) -> bool:
     )
 
 
-## Has caused problems in the past
-# [ "$(echo "${f1Video}" | jq -r '.Height' | head -n1)" \
-#    -ne "$(echo "${f2Video}" | jq -r '.Height' | head -n1)" ] \
-#    && return 1
-
-# [ "$(echo "${f1Video}" | jq -r '.Width' | head -n1)" \
-#    -ne "$(echo "${f2Video}" | jq -r '.Width' | head -n1)" ] \
-#    && return 1
-# [ "$(echo "${f1Video}" | jq -r '.ColorSpace' | head -n1)" != \
-#    "$(echo "${f2Video}" | jq -r '.ColorSpace' | head -n1)" ] \
-#    && return 1
-# [ "$(echo "${f2Video}" | jq -r '.Format' | head -n1)" != "HEVC" ] && return 1
-# [ "$(echo "${f2Video}" | jq -r '.CodecID' | head -n1)" != "hev1" ] \
-#    && [ "$(echo "${f2Video}" | jq -r '.CodecID' | head -n1)" != "hvc1" ] \
-#    && return 1
-# [ "${durationDiff}" -eq 0 ] && return 1
-# [ "${aspectRatio}" -eq 0 ] && return 1
-
-# f1Audio="$(echo "${f1_json}" \
-#    | jq '.media.track[] | select(.["@type"] == "Audio")')"
-# f2Audio="$(echo "${f2_json}" \
-#    | jq '.media.track[] | select(.["@type"] == "Audio")')"
-# duration1="$(echo "${f1Audio}" | jq -r '.Duration' | head -n1)"
-# duration2="$(echo "${f2Audio}" | jq -r '.Duration' | head -n1)"
-# durationDiff="$(bc << HERE
-# $BC_PREFIX
-# abs(${duration1} - ${duration2}) < $TOLERANCE
-# HERE#
-# )"
-
-## Has caused problems in the past
-##  instead, count tokens in ChannelLayout
-##[ "$(echo "${f1Audio}" | jq -r '.ChannelPositions' | head -n1)" != \
-##    "$(echo "${f2Audio}" | jq -r '.ChannelPositions' | head -n1)" ] && return 1
-##[ "$(echo "${f1Audio}" | jq -r '.ChannelLayout' | head -n1)" != \
-##    "$(echo "${f2Audio}" | jq -r '.ChannelLayout' | head -n1)" ] && return 1
-
-##[ "$(echo "${f1Audio}" | jq -r '.Format' | head -n1)" != \
-##    "$(echo "${f2Audio}" | jq -r '.Format' | head -n1)" ] && return 1
-# [ "${durationDiff}" -eq 0 ] && return 1
-
-# return 0
-
-## TODO: Multiple audio or video tracks?
-
-
 def change_ext(path: p.PosixPath, new_ext: str) -> str:
     return path.with_name(path.stem + "." + new_ext)
 
@@ -263,11 +178,11 @@ def get_converted_name(path: p.PosixPath) -> str:
 
 
 def is_mp4_x265(path: p.PosixPath):
-    gen_json = mediainfo_general(path)
+    gen_json = mediainfo(path, StreamType.General)[0]
     container = gen_json["Format"]
     if container != "MPEG-4":
         return False
-    vid_jsons = mediainfo_video(path)
+    vid_jsons = mediainfo(path, StreamType.Video)
     codecs = list(map(lambda obj: obj["Format"], vid_jsons))
     if any(map(lambda codec: codec != "HEVC", codecs)):
         return False
@@ -277,65 +192,18 @@ def is_mp4_x265(path: p.PosixPath):
     return True
 
 
-## Given a file, generate the ffmpeg string to convert all subtitles
-#  appropriately.
-#
-# @param path The input file path
-#
-# ffmpeg cannot convert subtitles between images and text, so the
-# only conversions allowed are text->text and bitmap->bitmap.
-# The examples below explain what format ffmpeg expects and how this
-# function generates its result.
-#
-# How ffmpeg must convert subtitles
-# ---------------------------------
-# Get all objects with @type text, pull their @typeorder and
-# CodecID. Subtract 1 from @typeorder. Then, if CodecID is
-# S_TEXT/UTF8 use mov_text, otherwise dvdsub:
-#   Example
-#     {
-#       "@type": "Text",
-#       "@typeorder": "2",
-#       "CodecID": "S_HDMV/PGS",
-#     }
-#
-#     ffmpeg ... -map 0:s:1 -c:s:1 dvdsub ...
-#   =========================================
-#   Example
-#     {
-#       "@type": "Text",
-#       "@typeorder": "5",
-#       "CodecID": "S_TEXT/UTF8"
-#     }
-#
-#     ffmpeg ... -map 0:s:4 -c:s:4 mov_text ...
-#
-# Valid *Stream* Indexes (called StreamOrder by mediainfo) can be
-# found with:
-#
-#   declare -a valid_stream_indices
-#   mapfile -t valid_stream_indices < <( \
-#       ffprobe -loglevel error -select_streams s \
-#         -show_entries packet=stream_index,duration \
-#         -of csv $fname \
-#     | grep -v 'N/A' \
-#     | cut -d, -f2 | sort -h | uniq \
-#   )
-#
-# @returns A string to be passed to ffmpeg as arguments
-#
-def generate_sub_conversions(path: p.PosixPath) -> str:
-    text_json = mediainfo_subtitle(path)
-
-    ffprobe_out = subprocess.run(
+def validate_conversions(path: p.Path, typ: StreamType, num_packets=200):
+    ## This will not grab tracks that aren't in the first `num_packets`
+    ## packets
+    ffprobe_out = s.run(
         [
             "ffprobe",
             "-loglevel",
             "error",
             "-read_intervals",
-            "0:00%+#200",
+            "0:00%+#" + str(num_packets),
             "-select_streams",
-            "s",
+            typ.ffprobe_ident(),
             "-show_entries",
             "packet=stream_index,duration",
             "-of",
@@ -365,61 +233,115 @@ def generate_sub_conversions(path: p.PosixPath) -> str:
             filter(lambda packet_lst: packet_lst[2] == "N/A", ffprobe_stdout),
         )
     )
-    if len(all_stream_ixs) != len(mediainfo_subtitle(path)):
-        raise (IndexError("Not enough packets were used to search for subtitles"))
+    return (all_stream_ixs, invalid_ixs)
+
+
+def get_stream_ix_offset(path: p.Path, typ: StreamType):
+    counts = {
+        "Video": int(mediainfo(path, StreamType.General)[0]["VideoCount"]),
+        "Audio": int(mediainfo(path, StreamType.General)[0]["AudioCount"]),
+    }
+
+    offset = 0
+    for typ_key in counts.keys():
+        if typ.name == typ_key:
+            break
+        else:
+            offset += counts[typ_key]
+
+    return offset
+
+
+## Given a file, generate the ffmpeg string to convert all subtitles
+#  appropriately.
+#
+# @param path The input file path
+#
+# ffmpeg cannot convert subtitles between images and text, so the
+# only conversions allowed are text->text and bitmap->bitmap.
+# The examples below explain what format ffmpeg expects and how this
+# function generates its result.
+#
+# How ffmpeg must convert subtitles
+# ---------------------------------
+# Get all objects with @type text, pull their @typeorder and
+# CodecID. Subtract 1 from @typeorder. Then, if CodecID is
+# S_TEXT/UTF8 use mov_text, otherwise dvdsub:
+#
+#   =========================================
+#   Example
+#     {
+#       "@type": "Text",
+#       "@typeorder": "2",
+#       "CodecID": "S_HDMV/PGS",
+#     }
+#
+#     ffmpeg ... -map 0:s:1 -c:s:1 dvdsub ...
+#   =========================================
+#   Example
+#     {
+#       "@type": "Text",
+#       "@typeorder": "5",
+#       "CodecID": "S_TEXT/UTF8"
+#     }
+#
+#     ffmpeg ... -map 0:s:4 -c:s:4 mov_text ...
+#
+# @returns A string to be passed to ffmpeg as arguments
+#
+def generate_conversions(path: p.PosixPath, typ: StreamType, validate=False) -> str:
+    num_frames = 200
+    codec_ids = list(map(lambda typ_json: typ_json["CodecID"], mediainfo(path, typ)))
+
+    offset = get_stream_ix_offset(path, typ)
+    if validate:
+        all_stream_ixs, invalid_ixs = validate_conversions(path, typ, num_packets=num_frames)
+    else:
+        invalid_ixs = []
+        all_stream_ixs = set([i + offset for i, _ in enumerate(codec_ids)])
+
+    # If 200 packets is too small, keep tryin'
+    more_frames = False
+    while len(all_stream_ixs) != len(mediainfo(path, typ)):
+        num_frames *= 2
+        if not more_frames:
+            print(f"{GAP}{GAP}Calculated stream indexes ({len(all_stream_ixs)}) for type '{typ}'")
+            print(f"{GAP}{GAP}do not match the mediainfo output ({len(mediainfo(path, typ))})")
+        if not validate:
+            raise AssertionError(f"{GAP}validate is false, something terrible has happened")
+        sys.stdout.write(f"{GAP}{GAP}Searching {num_frames} initial frames for streams -> ")
+        all_stream_ixs, invalid_ixs = validate_conversions(path, typ, num_packets=num_frames)
+        print(len(all_stream_ixs))
+        more_frames = True
+
     all_stream_ixs_json = set(
-        map(lambda sub_json: int(sub_json["StreamOrder"]), mediainfo_subtitle(path))
+        map(lambda sub_json: int(sub_json["StreamOrder"]), mediainfo(path, typ))
     )
-    valid_stream_ixs = all_stream_ixs.difference(invalid_ixs)
     if all_stream_ixs != all_stream_ixs_json:
         raise (
             ValueError(
-                "The subtitle indices found do not match those given by mediainfo"
+                f"The calculated '{typ}' indices found do not match those given by mediainfo"
             )
         )
 
-    vid_count = int(mediainfo_general(path)["VideoCount"])
-    aud_count = int(mediainfo_general(path)["AudioCount"])
-
-    type_ixs = [ix - vid_count - aud_count for ix in all_stream_ixs]
-    codec_ids = list(
-        map(lambda sub_json: sub_json["CodecID"], mediainfo_subtitle(path))
-    )
+    valid_stream_ixs = all_stream_ixs.difference(invalid_ixs)
 
     num_codecs_so_far = 0
     encoding_args = []
     for num_codecs_so_far, stream_ix in enumerate(valid_stream_ixs):
-        type_ix = stream_ix - vid_count - aud_count
+        type_ix = stream_ix - offset
         codec_id = codec_ids[type_ix]
         encoding = None
-        try:
-            encoding = CODEC_ID_MAP[codec_id]
-        except:
-            encoding = CODEC_ID_MAP["subtitle"]
+        encoding = CODEC_ID_MAP[codec_id]
+
+        encode_key = typ.ffprobe_ident()
         encoding_args += [
             "-map",
-            f"0:s:{type_ix}",
-            f"-c:s:{num_codecs_so_far}",
+            f"0:{encode_key}:{type_ix}",
+            f"-c:{encode_key}:{num_codecs_so_far}",
             f"{encoding}",
         ]
     return encoding_args
-
-    ## This will not grab text tracks that aren't in the first 200
-    ## packets
-
-    # num_codecs_so_far=0
-    # next_valid_ix=${valid_stream_ixs[0]}
-    # [ -z "$next_valid_ix" ] && return 0
-    # for ((ix = 0; ix < ${#stream_ixs[@]}; ix++)); do
-    #    [ -z "$next_valid_ix" ] && break
-    #    [ "${stream_ixs[$ix]}" -ne "$next_valid_ix" ] && continue
-    #    type_ix=$((type_ixs[ix]))
-    #    codec="${codec_ids[$ix]}"
-    #    echo -n " -map 0:s:$type_ix -c:s:$num_codecs_so_far "
-    #    [ "${codec:0:6}" = S_TEXT -o "${codec}" = "tx3g" ] && echo -n "mov_text" || echo -n dvdsub
-    #    num_codecs_so_far=$((num_codecs_so_far + 1))
-    #    next_valid_ix=${valid_stream_ixs[$num_codecs_so_far]}
-    # done
 
 
 def pprint_ffmpeg(path: p.Path) -> str:
@@ -430,7 +352,10 @@ def pprint_ffmpeg(path: p.Path) -> str:
 
     def write_to_width(lst, initial_indent="", subsequent_indent=GAP):
         wrapper = TextWrapper(
-            initial_indent=initial_indent, break_long_words=False, width=72, subsequent_indent=subsequent_indent
+            initial_indent=initial_indent,
+            break_long_words=False,
+            width=72,
+            subsequent_indent=subsequent_indent,
         )
         cmd = []
         for line in " ".join(map(str, lst)).splitlines(True):
@@ -438,12 +363,17 @@ def pprint_ffmpeg(path: p.Path) -> str:
             cmd += lst
         return cmd
 
-    return (write_to_width(lst[0:4]) + [f"{GAP}{GAP}{lst[4]} \\"] + write_to_width(lst[5:-1], GAP + GAP, GAP + GAP) + [f"{GAP}{GAP}{lst[-1]}"])
+    return (
+        write_to_width(lst[0:4])
+        + [f"{GAP}{GAP}{lst[4]} \\"]
+        + write_to_width(lst[5:-1], GAP + GAP, GAP + GAP)
+        + [f"{GAP}{GAP}{lst[-1]}"]
+    )
 
 
 @cache()
 def ffmpeg_cmd(path: p.Path) -> list[str]:
-    video_tracks = mediainfo_video(path)
+    video_tracks = mediainfo(path, StreamType.Video)
     heights = set(map(lambda track: track["Height"], video_tracks))
     widths = set(map(lambda track: track["Width"], video_tracks))
 
@@ -452,12 +382,9 @@ def ffmpeg_cmd(path: p.Path) -> list[str]:
     height = heights.pop()
     width = widths.pop()
 
-    audio_codec_ids = map(lambda track: track["CodecID"], mediainfo_audio(path))
-    video_codec_ids = map(lambda track: track["CodecID"], mediainfo_audio(path))
-
-    audio_conversions = []
-    for ix, codec_id in enumerate(audio_codec_ids):
-        audio_conversions += ["-map", f"0:a:{ix}", f"-c:a:{ix}", CODEC_ID_MAP[codec_id]]
+    audio_codec_ids = map(
+        lambda track: track["CodecID"], mediainfo(path, StreamType.Audio)
+    )
 
     return (
         [
@@ -466,18 +393,12 @@ def ffmpeg_cmd(path: p.Path) -> list[str]:
             f"{height}x{width}",
             "-i",
             f"{path}",
-            # "pipe:",
             "-strict",
             "-2",
-            "-map",
-            "0:v",
-            "-c:v",
-            "libx265",
-            "-tag:v:0",
-            "hvc1",
         ]
-        + audio_conversions
-        + generate_sub_conversions(path)
+        + generate_conversions(path, StreamType.Video)
+        + generate_conversions(path, StreamType.Audio)
+        + generate_conversions(path, StreamType.Text, validate=True)
         + [str(get_converted_name(path))]
     )
 
@@ -491,56 +412,28 @@ def process_vidlist(vidlist: [p.PosixPath], limit=None) -> bool:
     for cur_path in vidlist:
         if num_processed > limit:
             return True
-        video_streams = mediainfo_video(cur_path)
+        video_streams = mediainfo(cur_path, StreamType.Video)
         video_formats = list(map(lambda stream: stream["Format"], video_streams))
         if is_mp4_x265(cur_path):
             continue
 
-        cur_json = mediainfo(cur_path)
         new_path = get_converted_name(cur_path)
-        audio_streams = mediainfo_audio(cur_path)
-        text_streams = mediainfo_subtitle(cur_path)
+        audio_streams = mediainfo(cur_path, StreamType.Audio)
+        text_streams = mediainfo(cur_path, StreamType.Text)
         format_string = "({:" + f"{limit_digits}d" + "}/{:d}) Processing {}"
 
         print(format_string.format(num_processed, limit, cur_path.name))
         print(f"{GAP}Dir: {cur_path.parent}")
         print(f"{GAP}New file: {new_path}")
         print()
-        pv_proc_str = [GAP, "pv", "-F", '"' + PV_FMT +'"', "-w", "72", '"' + str(cur_path) + '"']
         ffmpeg_pretty_proc_str = pprint_ffmpeg(cur_path)
         ffmpeg_proc_str = ffmpeg_cmd(cur_path)
 
-        # Fix pipe
-        #ffmpeg_pretty_proc_str[0] = ffmpeg_proc_str[0][:-1] + "pipe: \\"
-        #ffmpeg_pretty_proc_str.pop(1)
-        #ffmpeg_proc_str[4] = "pipe:"
-        #ffmpeg_proc_str[4] = '"' + ffmpeg_proc_str[4] + '"'
-        #ffmpeg_proc_str[-1] = '"' + ffmpeg_proc_str[-1] +'"'
-
-        #pretty_proc_str = " ".join(pv_proc_str) + f"\\ \n{GAP}{GAP}| " + "\n".join(ffmpeg_pretty_proc_str)
-        #full_proc_str = " ".join(pv_proc_str) + f" | " + " ".join(ffmpeg_proc_str) + " 2>/dev/null"
         pretty_proc_str = f"{GAP}" + "\n".join(ffmpeg_pretty_proc_str)
-        #full_proc_str = " ".join(ffmpeg_proc_str) + " 2>/dev/null"
         print(pretty_proc_str)
         print()
-        #print(ffmpeg_proc_str)
         ffpb.main(argv=ffmpeg_proc_str[1:], stream=sys.stderr)
-        #subprocess.call(full_proc_str, shell=True)
 
-        #def ffmpeg_call():
-        #    subprocess.run(ffmpeg_cmd(cur_path))
-
-        #kill = False
-        #stop = False
-        #try:
-        #    ffmpeg_call()
-        #    time.sleep(1)
-        #    stop = True
-        #except KeyboardInterrupt or EOFError:
-        #    kill = True
-        #    stop = True
-
-        # verify_conversion(cur_path, new_path)
         if verify_conversion(cur_path, new_path):
             compression = find_compression_ratio(cur_path, new_path)
             print(f"{GAP}{color_green(CHECK)} Metadata matches")
