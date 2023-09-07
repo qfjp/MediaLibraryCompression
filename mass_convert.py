@@ -30,6 +30,8 @@ CODEC_ID_MAP = {
 
 
 DEBUG = False
+DEBUG_VERBOSITY = 1
+D_STRING = "--> "
 
 COLLISION_SUFFIX = "-compress"
 TOLERANCE = 6
@@ -69,18 +71,22 @@ def cache(cache_dict=GEN_CACHE):
         def wrapper(*args, **kwargs):
             func_name = func.__name__
             arg_tuple = args
+            kwarg_pairs = tuple([(key, kwargs[key]) for key in kwargs])
             try:
-                return cache_dict[func_name][arg_tuple]
+                return cache_dict[func_name][arg_tuple + kwarg_pairs]
             except KeyError:
                 pass
-            if DEBUG:
-                print("Caching result for", func_name)
+            if DEBUG_VERBOSITY >= 2:
+                dict_args = tuple([f"{key}{kwargs[key]}" for key in kwargs])
+                print(
+                    f"{GAP}{GAP}{GAP}{D_STRING}Caching result for {func_name}{args + dict_args}"
+                )
             result = func(*args, **kwargs)
             try:
-                cache_dict[func_name][arg_tuple] = result
+                cache_dict[func_name][arg_tuple + kwarg_pairs] = result
             except KeyError:
                 cache_dict[func_name] = dict()
-                cache_dict[func_name][arg_tuple] = result
+                cache_dict[func_name][arg_tuple + kwarg_pairs] = result
 
             return result
 
