@@ -16,6 +16,7 @@ from textwrap import TextWrapper
 
 import ffpb
 
+NUM_TO_PROCESS = 40
 
 CODEC_ID_MAP = {
     "S_TEXT/UTF8": "mov_text",
@@ -403,15 +404,22 @@ def ffmpeg_cmd(path: p.Path) -> list[str]:
     )
 
 
-def process_vidlist(vidlist: [p.PosixPath], limit=None) -> bool:
-    if limit is None:
-        limit = len(vidlist)
+def process_vidlist(
+    vidlist: [p.PosixPath],
+    limit=None,
+    convert_and_replace=True,
+    remove_bad_conversions=True,
+) -> float:
+    total_size_saved = 0
+    limit = len(vidlist) if (limit is None) else min(len(vidlist), limit)
     limit_digits = len(f"{limit}")
 
     num_processed = 0
     for cur_path in vidlist:
-        if num_processed > limit:
-            return True
+        # Because the size of the vidlist is iffy
+        if num_processed >= limit:
+            return total_size_saved
+
         video_streams = mediainfo(cur_path, StreamType.Video)
         video_formats = list(map(lambda stream: stream["Format"], video_streams))
         if is_mp4_x265(cur_path):
@@ -422,10 +430,21 @@ def process_vidlist(vidlist: [p.PosixPath], limit=None) -> bool:
         text_streams = mediainfo(cur_path, StreamType.Text)
         format_string = "({:" + f"{limit_digits}d" + "}/{:d}) Processing {}"
 
-        print(format_string.format(num_processed, limit, cur_path.name))
+        print(format_string.format(num_processed + 1, limit, cur_path.name))
         print(f"{GAP}Dir: {cur_path.parent}")
         print(f"{GAP}New file: {new_path}")
         print()
+        if os.path.exists(new_path):
+            print(f"{GAP}Found existing conversion, verify then skip:")
+            verified = verify_conversion(cur_path, new_path)
+            verif_color = color_green if verified else color_red
+            verif_mark = (
+                CHECK if verified else CROSS
+            )
+            verified_str = f"{GAP}{verif_color(verif_mark)} Verified: {verif_color(str(verified))}"
+            print(verified_str)
+            print()
+            continue
         ffmpeg_pretty_proc_str = pprint_ffmpeg(cur_path)
         ffmpeg_proc_str = ffmpeg_cmd(cur_path)
 
@@ -435,15 +454,29 @@ def process_vidlist(vidlist: [p.PosixPath], limit=None) -> bool:
         ffpb.main(argv=ffmpeg_proc_str[1:], stream=sys.stderr)
 
         if verify_conversion(cur_path, new_path):
+            old_size = os.path.getsize(cur_path)
+            new_size = os.path.getsize(new_path)
+            diff_size = old_size - new_size
+            total_size_saved += diff_size
             compression = find_compression_ratio(cur_path, new_path)
             print(f"{GAP}{color_green(CHECK)} Metadata matches")
-            print(f"{GAP}  Compression: {compression}%")
-            print("os.replace(new_path, cur_path)")
+            print(f"{GAP}  Compression: {compression:.3f}%")
+            print(
+                f"{GAP}{GAP}  Savings: {humanize.naturalsize(diff_size)} = {humanize.naturalsize(old_size)} - {humanize.naturalsize(new_size)}"
+            )
+            if convert_and_replace:
+                os.remove(cur_path)
         else:
             print(f"{GAP}{color_red(CROSS)} Metadata mismatch")
-            os.remove(new_path)
-        print()
+            if remove_bad_conversions:
+                os.remove(new_path)
+            else:
+                print(f"{GAP}Keeping {color_red(new_path)}")
+
         num_processed += 1
+        print()
+    # Because the size of the vidlist is accurate
+    return total_size_saved
 
 
 def human_readable(num, suffix="B"):
@@ -462,8 +495,10 @@ def find_compression_ratio(f1, f2):
 
 def main():
     vid_list = None
+    replace = True
     try:
         vid_list = [p.Path(sys.argv[1])]
+        replace = False
     except IndexError:
         vid_list = list(
             filter(
@@ -471,11 +506,14 @@ def main():
                 list(p.Path(".").glob("**/*mkv")) + list(p.Path(".").glob("**/*mp4")),
             )
         )
+
     files_and_sizes = list(map(lambda file: (file, os.path.getsize(file)), vid_list))
 
     files_and_sizes = sorted(files_and_sizes, key=lambda video_size: -video_size[1])
     videos = list(map(lambda video_size: video_size[0], files_and_sizes))
-    process_vidlist(videos, limit=5)
+    total_size_saved = process_vidlist(
+        videos, limit=NUM_TO_PROCESS, convert_and_replace=replace
+    )
 
 
 if __name__ == "__main__":
