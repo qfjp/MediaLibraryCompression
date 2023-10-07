@@ -1,4 +1,8 @@
 #!/bin/python
+import _io
+
+import argparse as ap
+import humanize
 import json
 import math
 import os
@@ -6,32 +10,58 @@ import pathlib as p
 import re
 import shutil
 import sys
-import textwrap
-import time
-import threading
 import subprocess as s
+import datetime
 
-from enum import Enum, auto
+from enum import Enum, unique
 from textwrap import TextWrapper
+from functools import reduce
 
 import ffpb
 
-NUM_TO_PROCESS = 40
+os.nice(10)
 
+# NVENC_SETTINGS = ["-tune", "hq", "-rc", "vbr", "-multipass", "qres", "-b_ref_mode", "each", "-rc-lookahead", 32, "-strict_gop", "1", "-spatial_aq", "1", "temporal_aq", "1"]
+# AV1_ENCODER = "libsvtav1"
+
+# Extensions of convertable files
+VIDEO_FILE_EXTS = set([".mkv", ".mp4"])
+
+COLLISION_SUFFIX = "converted"
+PRINT_WIDTH = 68
+DEBUG_VERBOSITY = None  # Set with -v switches, don't try to change it here
+DEBUG_STREAM = sys.stdout
+D_STRING = "--> "
+
+# Preserve AV1/VP9 encoded videos for now
+SKIP_CODECS = ["AV1", "VP9"]
+# Leave video codecs as None, this will get replaced by the argument
+# parser
 CODEC_ID_MAP = {
+    # Video
+    # "V_AV1": AV1_ENCODER,
+    "V_MPEG4/ISO/AVC": None,
+    "V_MPEGH/ISO/HEVC": None,
+    "avc1": None,
+    # Audio
+    "A_EAC3": "copy",
+    "A_DTS": "copy",
+    "A_AC3": "copy",
+    "ac-3": "copy",
+    "A_TRUEHD": "copy",
+    "AAC": "copy",
+    "A_AAC-2": "copy",
+    "mp4a-40-2": "copy",
+    "A_MPEG/L3": "copy",
+    "A_OPUS": "copy",
+    # Subtitle
+    "S_HDMV/PGS": "dvdsub",
+    "S_VOBSUB": "dvdsub",
+    "S_TEXT/ASS": "mov_text",
     "S_TEXT/UTF8": "mov_text",
     "tx3g": "mov_text",
-    "subtitle": "dvdsub",
-    "A_DTS": "ac3",
-    "A_AC3": "copy",
-    "AAC": "copy",
-    "mp4a-40-2": "copy",
 }
 
-
-DEBUG = False
-
-COLLISION_SUFFIX = "-compress"
 TOLERANCE = 6
 CROSS = "✖"
 CHECK = "✔"
@@ -40,12 +70,14 @@ GAP = "    "
 GEN_CACHE = dict()
 
 
+
+@unique
 class StreamType(Enum):
-    General = auto()
-    Video = auto()
-    Audio = auto()
-    Text = auto()
-    Menu = auto()
+    General = "General"
+    Video = "Video"
+    Audio = "Audio"
+    Text = "Text"
+    Menu = "Menu"
 
     def max_streams(self):
         if self == StreamType.General:
@@ -59,12 +91,29 @@ class StreamType(Enum):
         return self.name[0].lower()
 
 
-## A wrapper that causes a function's results to be memoized.
-#
-# Results are stored to a default dictionary, but you can supply your
-# own cache dictionary if it's necessary to keep separate caches.
-#
+class TermColor(Enum):
+    Red = 1
+    Green = 2
+    Yellow = 3
+    Blue = 4
+    Magenta = 5
+    Cyan = 6
+    Grey = 7
+
+
 def cache(cache_dict=GEN_CACHE):
+    """
+    A function wrapper that causes a function's results to be memoized
+
+    Results are stored to a default dictionary, but you can supply your
+    own cache dictionary if it's necessary to keep separate caches.
+
+    :param dict cache_dict: The structure that acts as the cache. Any
+      data structure with the same interface as a dictionary can be
+      used (e.g. a splay tree with the proper functions might improve
+      performance)
+    """
+
     def inner(func):
         def wrapper(*args, **kwargs):
             func_name = func.__name__
@@ -110,13 +159,151 @@ def mediainfo(path: p.Path, typ: StreamType = None) -> list[dict[StreamProperty,
     return typ_json
 
 
+def write_to_width(
+    string: str,
+    width: int = PRINT_WIDTH,
+    init_gap: str = GAP,
+    subs_gap: str = GAP,
+    delim: str = "\n",
+) -> str:
+    """
+    Convert a string to one that wraps to a certain width, with the
+    given left padding.
 
-def color_green(str):
-    return f"[0;32m{str}[0m"
+    :param str string: The string to format
+    :param int width: The width (number of characters) to wrap at.
+    :param str init_gap: The indentation of the first line.
+    :param str subs_gap: The indentation of all subsequent lines.
+    :param str delim: The delimiter to place between lines. By default,
+      this is '\\n'
+    :returns: The original string, padded by the given :code:`...gap`
+      parameters on the left and wrapped at :code:`width` on the right
+    :rtype: str
+    """
+    wrapper = TextWrapper(
+        initial_indent=init_gap,
+        break_long_words=False,
+        width=width,
+        subsequent_indent=subs_gap,
+    )
+    return delim.join(
+        list(map(lambda x: delim.join(wrapper.wrap(x)), string.splitlines(True)))
+    )
 
 
-def color_red(str):
-    return f"[0;31m{str}[0m"
+def print_to_width(
+    string: str,
+    init_gap: str = GAP,
+    subs_gap: str = GAP,
+    delim: str = "\n",
+    outstream: _io.TextIOWrapper = sys.stdout,
+) -> None:
+    """
+    Print a string, wrapping to a certain width, with the
+    given left padding.
+
+    :param str string: The string to format
+    :param int width: The width (number of characters) to wrap at.
+    :param str init_gap: The indentation of the first line.
+    :param str subs_gap: The indentation of all subsequent lines.
+    :param str delim: The delimiter to place between lines. By default,
+      this is :code:`"\\\\n"`
+    :param _io.TextIOWrapper outstream: The file stream to write to
+      (stdout by default).
+    :returns: None
+    """
+    outstream.write(
+        write_to_width(
+            string,
+            init_gap=init_gap,
+            subs_gap=subs_gap,
+            delim=delim,
+        )
+    )
+    outstream.write("\n")
+
+
+def print_d(
+    *args,
+    verbosity_limit: int = 2,
+    color: TermColor = TermColor.Blue,
+    inv=False,
+    bold=False,
+    outstream=sys.stdout,
+) -> None:
+    """
+    Print a string in DEBUG mode, possibly above a certain verbosity.
+    Any arg that contains already formatted text (through color_text)
+    will be preserved.
+
+    :param list[Any] args: A list of arguments to be printed, where they
+      will be separated by spaces.
+    :param int verbosity_limit: Sets the verbosity at (or above) which
+      the string will be printed.
+    :param TermColor color: Color the text using the given terminal color.
+    :param bool inv: If true, flip the background and foreground colors.
+    :param bool bold: If true, bold the text.
+    :param _io.TextIOWrapper outstream: The file stream to write to
+      (stdout by default).
+    :returns: None
+    """
+    if verbosity_limit > DEBUG_VERBOSITY:
+        return
+    d_str = f"{GAP}  ---> "
+    blank = " " * (len(d_str) - 3) + "-> "
+    result = write_to_width(
+        " ".join(map(str, args)), init_gap=d_str, subs_gap=blank, delim="\n"
+    )
+    color_val = 8
+    if color is not None:
+        color_val = color.value
+    color_prefix = 4 if inv else 3
+    bold_code = 1 if bold else 0
+    escape_code = f"[{bold_code};{color_prefix}{color_val}m"
+    return_code = "[0m"
+    new_result = []
+    next_escape = escape_code
+    inner_color = False
+    for line in result.splitlines():
+        line = re.sub("\[0m(?!|$)", f"[0m{escape_code}", line)
+        line = re.sub(d_str, f"{d_str}{next_escape}", line)
+        line = re.sub(blank, f"{blank}{next_escape}", line)
+        escapes = re.findall("\[[0-9];[0-9]{2}m", line)
+        last_escape_in_line = escapes[-1]
+        if escapes:
+            inner_color = None
+            try:
+                inner_color = line.index(last_escape_in_line) > line.index("[0m")
+            except ValueError:
+                inner_color = False
+        next_escape = last_escape_in_line if inner_color else escape_code
+        new_result.append(line + return_code)
+
+    outstream.write("\n".join(new_result))
+    outstream.write("\n")
+
+
+def color_text(string: str, color: TermColor, inv=False, bold=False) -> str:
+    """
+    Changes a string's color.
+
+    :param str string: The input string
+    :param TermColor color: The (ascii terminal) color
+    :param bool inv: If true, change the background color instead.
+    :param bool bold: If true, bold the text and use the bolded color code.
+    :returns: The string, wrapped with ANSI terminal codes for the given color text.
+    :rtype: str
+    """
+    color_val = color.value
+    color_prefix = 4 if inv else 3
+    bold_code = 1 if bold else 0
+    escape_code = f"[{bold_code};{color_prefix}{color_val}m"
+    return_code = "[0m"
+    # Replace all end escape codes (^[[0m) in the original string
+    # with a new color following them (^[[0m^[[...), unless they
+    # end the string or are already followed by a color
+    colors_preserved = re.sub("\[0m(?!|$)", f"[0m{escape_code}", string)
+    return escape_code + colors_preserved + return_code
 
 
 def verify_conversion(fname1: p.Path, fname2: p.Path) -> bool:
@@ -347,28 +534,24 @@ def generate_conversions(path: p.PosixPath, typ: StreamType, validate=False) -> 
 
 def pprint_ffmpeg(path: p.Path) -> str:
     lst = ffmpeg_cmd(path).copy()
-    lst[4] = '"' + lst[4] + '"'
+    ix = lst.index(str(path))
+    lst[ix] = '"' + lst[ix] + '"'
     lst[-1] = '"' + lst[-1] + '"'
     width = shutil.get_terminal_size().columns
+    delim = " \\ \n"
 
-    def write_to_width(lst, initial_indent="", subsequent_indent=GAP):
-        wrapper = TextWrapper(
-            initial_indent=initial_indent,
-            break_long_words=False,
-            width=72,
-            subsequent_indent=subsequent_indent,
-        )
-        cmd = []
-        for line in " ".join(map(str, lst)).splitlines(True):
-            lst = map(lambda s: s + " \\", wrapper.wrap(line))
-            cmd += lst
-        return cmd
-
-    return (
-        write_to_width(lst[0:4])
-        + [f"{GAP}{GAP}{lst[4]} \\"]
-        + write_to_width(lst[5:-1], GAP + GAP, GAP + GAP)
-        + [f"{GAP}{GAP}{lst[-1]}"]
+    return delim.join(
+        [
+            write_to_width(" ".join(lst[0:ix]), delim=delim),
+            2 * GAP + f"{lst[ix]}",
+            write_to_width(
+                " ".join(lst[ix + 1 : -1]),
+                init_gap=2 * GAP,
+                subs_gap=2 * GAP,
+                delim=delim,
+            ),
+            2 * GAP + f"{lst[-1]}",
+        ]
     )
 
 
@@ -430,18 +613,31 @@ def process_vidlist(
         text_streams = mediainfo(cur_path, StreamType.Text)
         format_string = "({:" + f"{limit_digits}d" + "}/{:d}) Processing {}"
 
-        print(format_string.format(num_processed + 1, limit, cur_path.name))
-        print(f"{GAP}Dir: {cur_path.parent}")
-        print(f"{GAP}New file: {new_path}")
+        print_to_width(
+            format_string.format(num_processed + 1, limit, cur_path.name),
+            init_gap="",
+            subs_gap=GAP,
+        )
+        print_to_width(
+            f"Dir: {cur_path.parent}",
+            subs_gap=GAP + "".join(map(lambda x: " ", "Dir: ")),
+        )
+        print_to_width(
+            f"New file: {new_path}",
+            subs_gap=GAP + "".join(map(lambda x: " ", "New file: ")),
+            delim="\\ \n",
+        )
         print()
         if os.path.exists(new_path):
-            print(f"{GAP}Found existing conversion, verify then skip:")
+            print_to_width(f"Found existing conversion, verify then skip:")
             verified = verify_conversion(cur_path, new_path)
-            verif_color = color_green if verified else color_red
-            verif_mark = (
-                CHECK if verified else CROSS
+            verif_color = (
+                (lambda x: color_text(x, TermColor.Green))
+                if verified
+                else (lambda x: color_text(x, TermColor.Red))
             )
-            verified_str = f"{GAP}{verif_color(verif_mark)} Verified: {verif_color(str(verified))}"
+            verif_mark = CHECK if verified else CROSS
+            verified_str = write_to_width(f"{verif_color(verif_mark)} Verified")
             print(verified_str)
             print()
             continue
@@ -459,19 +655,37 @@ def process_vidlist(
             diff_size = old_size - new_size
             total_size_saved += diff_size
             compression = find_compression_ratio(cur_path, new_path)
-            print(f"{GAP}{color_green(CHECK)} Metadata matches")
-            print(f"{GAP}  Compression: {compression:.3f}%")
-            print(
-                f"{GAP}{GAP}  Savings: {humanize.naturalsize(diff_size)} = {humanize.naturalsize(old_size)} - {humanize.naturalsize(new_size)}"
+            print_to_width(f"{color_text(CHECK, TermColor.Green)} Metadata matches")
+            print_to_width(
+                f"Compression: {compression:.3f}%", init_gap=(2 * GAP + "  ")
             )
-            if convert_and_replace:
+            print_to_width(
+                f"Savings: {humanize.naturalsize(diff_size)} = {humanize.naturalsize(old_size)} - {humanize.naturalsize(new_size)}",
+                init_gap=2 * GAP + "  ",
+            )
+            if convert_and_replace and cur_path.suffix == ".mp4":
+                os.replace(new_path, cur_path)
+            elif convert_and_replace:
                 os.remove(cur_path)
-        else:
-            print(f"{GAP}{color_red(CROSS)} Metadata mismatch")
-            if remove_bad_conversions:
-                os.remove(new_path)
+            elif cur_path.suffix == ".mp4":
+                print_to_width(
+                    f"os.replace({new_path}, {cur_path})",
+                    subs_gap=2 * GAP,
+                    delim=" \\\n",
+                )
             else:
-                print(f"{GAP}Keeping {color_red(new_path)}")
+                print_to_width(
+                    f"os.remove({cur_path})", subs_gap=2 * GAP, delim=" \\\n"
+                )
+        else:
+            print_to_width(f"{color_text(CROSS, TermColor.Red)} Metadata mismatch")
+                os.remove(new_path)
+                print()
+            else:
+                print_to_width(f"Keeping {color_text(new_path, TermColor.Red)}")
+                print()
+                num_processed += 1
+            continue
 
         num_processed += 1
         print()
@@ -518,3 +732,22 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def test_print_d():
+    print_d(
+        "hello "
+        + color_text(CHECK, TermColor.Green)
+        + " something a bit longer "
+        + color_text(
+            "what is something "
+            + color_text("about", TermColor.Yellow)
+            + " the watchers",
+            TermColor.Blue,
+        )
+        + " bud"
+        + " in this cruel world of ours, sometimes it is necessary",
+        bold=True,
+        inv=True,
+        color=TermColor.Red,
+    )
