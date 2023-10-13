@@ -19,7 +19,11 @@ from functools import reduce
 
 import ffpb
 
+
 os.nice(10)
+
+NUM_TO_PROCESS = 40
+
 
 # NVENC_SETTINGS = ["-tune", "hq", "-rc", "vbr", "-multipass", "qres", "-b_ref_mode", "each", "-rc-lookahead", 32, "-strict_gop", "1", "-spatial_aq", "1", "temporal_aq", "1"]
 # AV1_ENCODER = "libsvtav1"
@@ -69,6 +73,10 @@ GAP = "    "
 
 GEN_CACHE = dict()
 
+
+class StreamProperty(Enum):
+    # TBD
+    pass
 
 
 @unique
@@ -483,7 +491,9 @@ def generate_conversions(path: p.PosixPath, typ: StreamType, validate=False) -> 
 
     offset = get_stream_ix_offset(path, typ)
     if validate:
-        all_stream_ixs, invalid_ixs = validate_conversions(path, typ, num_packets=num_frames)
+        all_stream_ixs, invalid_ixs = validate_conversions(
+            path, typ, num_packets=num_frames
+        )
     else:
         invalid_ixs = []
         all_stream_ixs = set([i + offset for i, _ in enumerate(codec_ids)])
@@ -493,12 +503,22 @@ def generate_conversions(path: p.PosixPath, typ: StreamType, validate=False) -> 
     while len(all_stream_ixs) != len(mediainfo(path, typ)):
         num_frames *= 2
         if not more_frames:
-            print(f"{GAP}{GAP}Calculated stream indexes ({len(all_stream_ixs)}) for type '{typ}'")
-            print(f"{GAP}{GAP}do not match the mediainfo output ({len(mediainfo(path, typ))})")
+            print(
+                f"{GAP}{GAP}Calculated stream indexes ({len(all_stream_ixs)}) for type '{typ}'"
+            )
+            print(
+                f"{GAP}{GAP}do not match the mediainfo output ({len(mediainfo(path, typ))})"
+            )
         if not validate:
-            raise AssertionError(f"{GAP}validate is false, something terrible has happened")
-        sys.stdout.write(f"{GAP}{GAP}Searching {num_frames} initial frames for streams -> ")
-        all_stream_ixs, invalid_ixs = validate_conversions(path, typ, num_packets=num_frames)
+            raise AssertionError(
+                f"{GAP}validate is false, something terrible has happened"
+            )
+        sys.stdout.write(
+            f"{GAP}{GAP}Searching {num_frames} initial frames for streams -> "
+        )
+        all_stream_ixs, invalid_ixs = validate_conversions(
+            path, typ, num_packets=num_frames
+        )
         print(len(all_stream_ixs))
         more_frames = True
 
@@ -679,6 +699,7 @@ def process_vidlist(
                 )
         else:
             print_to_width(f"{color_text(CROSS, TermColor.Red)} Metadata mismatch")
+            if remove_bad_conversions:
                 os.remove(new_path)
                 print()
             else:
