@@ -1,5 +1,5 @@
 #!/bin/python
-import _io
+import _io  # type: ignore
 
 import argparse as ap
 import datetime
@@ -15,18 +15,43 @@ import shutil
 import subprocess as s
 import sys
 
-from enum import Enum, unique
+from enum import Enum, unique, auto
 from textwrap import TextWrapper
-from typing import Callable
+from typing import Callable, Optional, ParamSpec, TypeVar
 from functools import reduce
 
-import ffpb
+import ffpb  # type: ignore
 
 os.nice(10)
 
 
 class CliState:
-    pass
+    """
+    Stub class to hold the parsed arguments.
+
+    This is only necessary for type checking, ultimately the following
+    would also work:
+
+    .. code:: python
+
+        class CliState:
+            pass
+
+    """
+
+    FILES: list[p.Path]
+    user: str
+    uid: int
+    group: str
+    gid: int
+    verbosity: int
+    umask: int
+    list_files: bool
+    keep_failures: bool
+    keep_original: bool
+    dry_run: bool
+    num_files: int
+    encoder: str
 
 
 class UMask:
@@ -37,8 +62,8 @@ class UMask:
         if len(string) not in [3, 4]:
             raise ValueError("UMask must be a string of 3 or 4 numbers")
         overall_mask = 0
-        for ix, digit in enumerate(string[:0:-1]):
-            digit = int(digit)
+        for ix, digit_str in enumerate(string[:0:-1]):
+            digit = int(digit_str)
             if digit not in list(range(8)):
                 raise ValueError("UMask digits must match [0-7]")
             statmask = 7 - int(digit)
@@ -65,7 +90,7 @@ class StreamType(Enum):
     Text = "Text"
     Menu = "Menu"
 
-    def max_streams(self):
+    def max_streams(self) -> Optional[int]:
         """
         The maximum number of streams of a given type that `should` be
         encountered in a typical output of :func:`mediainfo`. This is
@@ -76,7 +101,7 @@ class StreamType(Enum):
         else:
             return None
 
-    def ffprobe_ident(self):
+    def ffprobe_ident(self) -> str:
         """
         The identifier for a given stream type used by :code:`ffprobe`.
         """
@@ -131,93 +156,38 @@ CODEC_ID_MAP = {
     "tx3g": "mov_text",
 }
 
-exact_match = lambda x, y: x == y
-exact_int = lambda x, y: int(x) == int(y)
-set_match = lambda x, y: string_val_to_set(x) == string_val_to_set(y)
-almost_int = lambda x, y: math.fabs(int(x) - int(y)) <= 1
-fuzzy_int = lambda x, y: math.fabs(int(x) - int(y)) <= INT_TOLERANCE
-fuzzy_float = lambda x, y: math.fabs(float(x) - float(y)) <= FLOAT_TOLERANCE
-fuzziest_float = lambda x, y: math.fabs(float(x) - float(y)) <= INT_TOLERANCE
-matches = lambda match_str: lambda _, y: y == match_str
 
-STREAM_PROP_COMPARE_FUNCS = {
-    (StreamType.General, "AudioCount"): exact_int,
-    (StreamType.General, "Duration"): fuzziest_float,
-    (StreamType.General, "FrameCount"): almost_int,
-    (StreamType.General, "FrameRate"): fuzzy_float,
-    (StreamType.General, "IsStreamable"): matches("Yes"),
-    (StreamType.General, "Title"): exact_match,
-    (StreamType.General, "VideoCount"): exact_int,
-    # Video
-    (StreamType.Video, "BitDepth"): exact_match,
-    (StreamType.Video, "ChromaSubsampling"): exact_match,
-    (StreamType.Video, "ColorSpace"): exact_match,
-    (StreamType.Video, "DisplayAspectRatio"): fuzzy_float,
-    (StreamType.Video, "Duration"): fuzziest_float,
-    (StreamType.Video, "FrameCount"): almost_int,
-    (StreamType.Video, "FrameRate"): fuzzy_float,
-    (StreamType.Video, "FrameRate_Den"): exact_int,
-    (StreamType.Video, "FrameRate_Mode"): exact_match,
-    (StreamType.Video, "FrameRate_Num"): exact_int,
-    (StreamType.Video, "Height"): exact_int,
-    (StreamType.Video, "PixelAspectRatio"): exact_match,
-    (StreamType.Video, "Sampled_Height"): exact_int,
-    (StreamType.Video, "Sampled_Width"): exact_int,
-    (StreamType.Video, "ScanType"): matches("Progressive"),
-    (StreamType.Video, "Width"): exact_int,
-    # Audio
-    (StreamType.Audio, "BitRate_Maximum"): exact_int,
-    (StreamType.Audio, "ChannelLayout"): set_match,
-    (StreamType.Audio, "ChannelPositions"): set_match,
-    (StreamType.Audio, "Channels"): exact_int,
-    (StreamType.Audio, "Compression_Mode"): exact_match,
-    (StreamType.Audio, "Duration"): fuzziest_float,
-    (StreamType.Audio, "FrameRate"): fuzzy_float,
-    (StreamType.Audio, "FrameRate_Den"): exact_int,
-    (StreamType.Audio, "FrameRate_Num"): exact_int,
-    (StreamType.Audio, "SamplingRate"): exact_int,
-    (StreamType.Audio, "ServiceKind"): exact_match,
-}
+def exact_match(x: str, y: str) -> bool:
+    return x == y
 
-STREAM_PROP_TESTS = [
-    # General
-    (StreamType.General, "AudioCount"),  # exact_int
-    (StreamType.General, "Duration"),  # fuzziest_float
-    # (StreamType.General, "FrameCount"),  # almost_int
-    (StreamType.General, "FrameRate"),  # fuzzy_float
-    (StreamType.General, "IsStreamable"),  # matches("Yes")
-    (StreamType.General, "Title"),
-    (StreamType.General, "VideoCount"),  # exact_int
-    # Video
-    (StreamType.Video, "BitDepth"),
-    (StreamType.Video, "ChromaSubsampling"),
-    (StreamType.Video, "ColorSpace"),
-    (StreamType.Video, "DisplayAspectRatio"),  # fuzzy_float
-    (StreamType.Video, "Duration"),  # fuzziest_float
-    # (StreamType.Video, "FrameCount"),  # almost_int
-    (StreamType.Video, "FrameRate"),  # fuzzy_float
-    # (StreamType.Video, "FrameRate_Den"),  # exact_int
-    # (StreamType.Video, "FrameRate_Mode"),
-    # (StreamType.Video, "FrameRate_Num"),  # exact_int
-    (StreamType.Video, "Height"),  # exact_int
-    (StreamType.Video, "PixelAspectRatio"),
-    (StreamType.Video, "Sampled_Height"),  # exact_int
-    (StreamType.Video, "Sampled_Width"),  # exact_int
-    (StreamType.Video, "ScanType"),  # matches("Progressive")
-    (StreamType.Video, "Width"),  # exact_int
-    # Audio
-    # (StreamType.Audio, "BitRate_Maximum"),  # exact_int
-    (StreamType.Audio, "ChannelLayout"),  # set_match
-    (StreamType.Audio, "ChannelPositions"),  # set_match
-    (StreamType.Audio, "Channels"),  # exact_int
-    (StreamType.Audio, "Compression_Mode"),
-    (StreamType.Audio, "Duration"),  # fuzziest_float
-    (StreamType.Audio, "FrameRate"),  # fuzzy_float
-    (StreamType.Audio, "FrameRate_Den"),  # exact_int
-    (StreamType.Audio, "FrameRate_Num"),  # exact_int
-    (StreamType.Audio, "SamplingRate"),  # exact_int
-    (StreamType.Audio, "ServiceKind"),
-]
+
+def exact_int(x: str, y: str) -> bool:
+    return int(x) == int(y)
+
+
+def set_match(x: str, y: str) -> bool:
+    return string_val_to_set(x) == string_val_to_set(y)
+
+
+def almost_int(x: str, y: str) -> bool:
+    return math.fabs(int(x) - int(y)) <= 1
+
+
+def fuzzy_int(x: str, y: str) -> bool:
+    return math.fabs(int(x) - int(y)) <= INT_TOLERANCE
+
+
+def fuzzy_float(x: str, y: str) -> bool:
+    return math.fabs(float(x) - float(y)) <= FLOAT_TOLERANCE
+
+
+def fuzziest_float(x: str, y: str) -> bool:
+    return math.fabs(float(x) - float(y)) <= INT_TOLERANCE
+
+
+def matches(match_str: str) -> Callable[[str, str], bool]:
+    return lambda _, y: y == match_str
+
 
 INT_TOLERANCE = 6
 FLOAT_TOLERANCE = 0.2
@@ -225,11 +195,14 @@ CROSS = "✖"
 CHECK = "✔"
 GAP = "    "
 
-GEN_CACHE = dict()
+PS = ParamSpec("PS")
+R = TypeVar("R")
+
+GEN_CACHE: dict[str, dict[PS, R]] = dict()
 
 
 class ExtraClassProperty:
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: PS.args, **kwargs: PS.kwargs):
         self.prop_list = args + tuple((key, kwargs[key]) for key in kwargs)
 
 
@@ -242,117 +215,100 @@ class StreamProperty(Enum):
     objects that the property might be found in. For example, for the
     property
 
-    .. code-block::
+    .. code-block:: python
 
         TypeOrder = _create_val("@typeorder", ["Audio", "Text"])
 
     this can be found in the output of :code:`mediainfo --output=JSON ...`
     as such:
 
-    .. code-block::
+    .. code-block:: json
 
-        ...
         { "@type": "Audio",
-          "@typeorder": ...
-          ...
+          "@typeorder": "..."
+          "..."
         },
         { "@type": "Text",
-          "@typeorder": ...
+          "@typeorder": "..."
+          "..."
         },
-        ...
 
     """
 
-    def valid_streams(self) -> list[StreamType]:
-        """
-        The valid :py:class:`StreamType`'s that a given property can be
-        found in.
-        """
-        return self.value[1]
+    # These need an ordering and a hash to be able to be placed in a set
+    def __gt__(self, other):  # type: ignore
+        return self.name > other.name
 
-    def _create_val(
-        value: str, stream_types: list[str]
-    ) -> tuple[str, list[StreamType]]:
-        return (value, list(map(lambda x: StreamType[x], stream_types)))
+    def __lt__(self, other):  # type: ignore
+        return self.name < other.name
 
-    # All
-    Type = ("@type", list(StreamType))
-    # General, Video, Audio
-    UniqueID = _create_val("UniqueID", ["General", "Video", "Audio"])
-    Duration = _create_val("Duration", ["General", "Video", "Audio"])
-    Format = _create_val("Format", ["General", "Video", "Audio"])
-    StreamSize = _create_val("StreamSize", ["General", "Video", "Audio"])
-    FrameRate = _create_val("FrameRate", ["General", "Video", "Audio"])
-    Title = _create_val("Title", ["General", "Video", "Audio"])
-    FrameCount = _create_val("FrameCount", ["General", "Video", "Audio"])
-    # Video, Audio, Text
-    StreamOrder = _create_val("StreamOrder", ["Video", "Audio", "Text"])
-    ID = _create_val("ID", ["Video", "Audio", "Text"])
-    CodecID = _create_val("CodecID", ["Video", "Audio", "Text"])
-    BitRate = _create_val("BitRate", ["Video", "Audio", "Text"])
-    Language = _create_val("Language", ["Video", "Audio", "Text"])
-    Default = _create_val("Default", ["Video", "Audio", "Text"])
-    Forced = _create_val("Forced", ["Video", "Audio", "Text"])
-    # Video, Audio
-    BitDepth = _create_val("BitDepth", ["Video", "Audio"])
-    BitRate_Mode = _create_val("BitRate_Mode", ["Video", "Audio"])
-    Delay = _create_val("Delay", ["Video", "Audio"])
-    Delay_Source = _create_val("Delay_Source", ["Video", "Audio"])
-    # Audio, Text
-    TypeOrder = _create_val("@typeorder", ["Audio", "Text"])
-    # General
-    VideoCount = _create_val("VideoCount", ["General"])
-    AudioCount = _create_val("AudioCount", ["General"])
-    TextCount = _create_val("TextCount", ["General"])
-    MenuCount = _create_val("MenuCount", ["General"])
-    FileExtension = _create_val("FileExtension", ["General"])
-    Format_Version = _create_val("Format_Version", ["General"])
-    FileSize = _create_val("FileSize", ["General"])
-    OverallBitRate_Mode = _create_val("OverallBitRate_Mode", ["General"])
-    OverallBitRate = _create_val("OverallBitRate", ["General"])
-    IsStreamable = _create_val("IsStreamable", ["General"])
-    Movie = _create_val("Movie", ["General"])
-    Encoded_Date = _create_val("Encoded_Date", ["General"])
-    File_Modified_Date = _create_val("File_Modified_Date", ["General"])
-    File_Modified_Date_Local = _create_val("File_Modified_Date_Local", ["General"])
-    Encoded_Application = _create_val("Encoded_Application", ["General"])
-    Encoded_Library = _create_val("Encoded_Library", ["General"])
-    # Video
-    Format_Profile = _create_val("Format_Profile", ["Video"])
-    Format_Level = _create_val("Format_Level", ["Video"])
-    Format_Settings_CABAC = _create_val("Format_Settings_CABAC", ["Video"])
-    Format_Settings_RefFrames = _create_val("Format_Settings_RefFrames", ["Video"])
-    Format_Settings_GOP = _create_val("Format_Settings_GOP", ["Video"])
-    Width = _create_val("Width", ["Video"])
-    Height = _create_val("Height", ["Video"])
-    Stored_Height = _create_val("Stored_Height", ["Video"])
-    Sampled_Width = _create_val("Sampled_Width", ["Video"])
-    Sampled_Height = _create_val("Sampled_Height", ["Video"])
-    PixelAspectRatio = _create_val("PixelAspectRatio", ["Video"])
-    DisplayAspectRatio = _create_val("DisplayAspectRatio", ["Video"])
-    FrameRate_Mode = _create_val("FrameRate_Mode", ["Video"])
-    FrameRate_Num = _create_val("FrameRate_Num", ["Video"])
-    FrameRate_Den = _create_val("FrameRate_Den", ["Video"])
-    ColorSpace = _create_val("ColorSpace", ["Video"])
-    ChromaSubsampling = _create_val("ChromaSubsampling", ["Video"])
-    ScanType = _create_val("ScanType", ["Video"])
-    BufferSize = _create_val("BufferSize", ["Video"])
-    # Audio
-    Format_Commercial_IfAny = _create_val("Format_Commercial_IfAny", ["Audio"])
-    Format_Settings_Mode = _create_val("Format_Settings_Mode", ["Audio"])
-    Format_Settings_Endianness = _create_val("Format_Settings_Endianness", ["Audio"])
-    Format_AdditionalFeatures = _create_val("Format_AdditionalFeatures", ["Audio"])
-    Channels = _create_val("Channels", ["Audio"])
-    ChannelPositions = _create_val("ChannelPositions", ["Audio"])
-    ChannelLayout = _create_val("ChannelLayout", ["Audio"])
-    SamplesPerFrame = _create_val("SamplesPerFrame", ["Audio"])
-    SamplingRate = _create_val("SamplingRate", ["Audio"])
-    SamplingCount = _create_val("SamplingCount", ["Audio"])
-    Compression_Mode = _create_val("Compression_Mode", ["Audio"])
-    Video_Delay = _create_val("Video_Delay", ["Audio"])
-    ServiceKind = _create_val("ServiceKind", ["Audio"])
-    # Text
-    ElementCount = _create_val("ElementCount", ["Text"])
+    def __eq__(self, other):  # type: ignore
+        return self.name == other.name
+
+    def __hash__(self):  # type: ignore
+        return self.name.__hash__()
+
+    def get_valid_types(self) -> set[StreamType]:
+        return self.value[0]  # type: ignore
+
+    def get_comparison_func(self) -> Callable[[str, str], bool]:
+        return self.value[1]  # type: ignore
+
+    ## These tests tend to fail:
+    # FrameCount = (set([StreamType.General, StreamType.Video]), almost_int)
+    # FrameRate_Den = (set([StreamType.Video, StreamType.Audio]), exact_int)
+    # FrameRate_Mode = (set([StreamType.Video]), exact_match)
+    # FrameRate_Num = (set([StreamType.Video, StreamType.Audio]), exact_int)
+    # BitRate_Maximum = (set([StreamType.Audio]), exact_int)
+
+    # These are solely for categorization, so the comparison
+    # function is const(True)
+    Format = (
+        set([StreamType.General, StreamType.Video, StreamType.Audio, StreamType.Text]),
+        lambda x, y: True,
+        auto(),
+    )
+    CodecID = (
+        set([StreamType.Video, StreamType.Audio, StreamType.Text]),
+        lambda x, y: True,
+        auto(),
+    )
+    StreamOrder = (
+        set([StreamType.Video, StreamType.Audio, StreamType.Text]),
+        lambda x, y: True,
+        auto(),
+    )
+
+    Duration = (
+        set([StreamType.General, StreamType.Video, StreamType.Audio]),
+        fuzziest_float,
+        auto(),
+    )
+    FrameRate = (
+        set([StreamType.General, StreamType.Video, StreamType.Audio]),
+        fuzzy_float,
+        auto(),
+    )
+    AudioCount = (set([StreamType.General]), exact_int, auto())
+    IsStreamable = (set([StreamType.General]), matches("Yes"), auto())
+    Title = (set([StreamType.General]), exact_match, auto())
+    VideoCount = (set([StreamType.General]), exact_int, auto())
+    BitDepth = (set([StreamType.Video]), exact_match, auto())
+    ChromaSubsampling = (set([StreamType.Video]), exact_match, auto())
+    ColorSpace = (set([StreamType.Video]), exact_match, auto())
+    DisplayAspectRatio = (set([StreamType.Video]), fuzzy_float, auto())
+    Height = (set([StreamType.Video]), exact_int, auto())
+    PixelAspectRatio = (set([StreamType.Video]), exact_match, auto())
+    Sampled_Height = (set([StreamType.Video]), exact_int, auto())
+    Sampled_Width = (set([StreamType.Video]), exact_int, auto())
+    ScanType = (set([StreamType.Video]), matches("Progressive"), auto())
+    Width = (set([StreamType.Video]), exact_int, auto())
+    ChannelLayout = (set([StreamType.Audio]), set_match, auto())
+    ChannelPositions = (set([StreamType.Audio]), set_match, auto())
+    Channels = (set([StreamType.Audio]), exact_int, auto())
+    Compression_Mode = (set([StreamType.Audio]), exact_match, auto())
+    SamplingRate = (set([StreamType.Audio]), exact_int, auto())
+    ServiceKind = (set([StreamType.Audio]), exact_match, auto())
 
 
 class TermColor(Enum):
@@ -366,10 +322,10 @@ class TermColor(Enum):
     Blue = 4
     Magenta = 5
     Cyan = 6
-    Grey = 7
+    White = 7
 
 
-def cache(cache_dict=GEN_CACHE):
+def cache(func: Callable[PS, R]) -> Callable[PS, R]:
     """
     A function wrapper that causes a function's results to be memoized
 
@@ -382,33 +338,30 @@ def cache(cache_dict=GEN_CACHE):
       performance)
     """
 
-    def inner(func):
-        def wrapper(*args, **kwargs):
-            func_name = func.__name__
-            arg_tuple = args
-            kwarg_pairs = tuple([(key, kwargs[key]) for key in kwargs])
-            try:
-                return cache_dict[func_name][arg_tuple + kwarg_pairs]
-            except KeyError:
-                pass
-            dict_args = tuple([f"{key}{kwargs[key]}" for key in kwargs])
-            print_d(
-                f"{D_STRING}Caching result for {func_name}{args + dict_args}",
-            )
-            result = func(*args, **kwargs)
-            try:
-                cache_dict[func_name][arg_tuple + kwarg_pairs] = result
-            except KeyError:
-                cache_dict[func_name] = dict()
-                cache_dict[func_name][arg_tuple + kwarg_pairs] = result
+    def inner(*args: PS.args, **kwargs: PS.kwargs) -> R:
+        func_name = func.__name__
+        arg_tuple: PS.args = args
+        kwarg_pairs = tuple([(key, kwargs[key]) for key in kwargs])
+        try:
+            return GEN_CACHE[func_name][arg_tuple + kwarg_pairs]
+        except KeyError:
+            pass
+        dict_args = tuple([f"{key}{kwargs[key]}" for key in kwargs])
+        print_d(
+            f"{D_STRING}Caching result for {func_name}{args + dict_args}",
+        )
+        result = func(*args, **kwargs)
+        try:
+            GEN_CACHE[func_name][arg_tuple + kwarg_pairs] = result
+        except KeyError:
+            GEN_CACHE[func_name] = dict()
+            GEN_CACHE[func_name][arg_tuple + kwarg_pairs] = result
 
-            return result
+        return result
 
-        # Doc might be the only necessary thing here
-        wrapper.__doc__ = func.__doc__
-        wrapper.__annotations__ = func.__annotations__
-        wrapper.__name__ = func.__name__
-        return wrapper
+    inner.__doc__ = func.__doc__
+    inner.__annotations__ = func.__annotations__
+    inner.__name__ = func.__name__
 
     return inner
 
@@ -432,7 +385,7 @@ def write_timedelta(td: datetime.timedelta) -> str:
 
     """
 
-    def reduce_time(multiple, unreduced_in_unit) -> tuple[float, float]:
+    def reduce_time(multiple: float, unreduced_in_unit: float) -> tuple[float, float]:
         unreduced_mult_unit = unreduced_in_unit / multiple
         remain = multiple * (unreduced_mult_unit - math.floor(unreduced_mult_unit))
         next_unreduced = unreduced_mult_unit - remain / multiple
@@ -445,7 +398,7 @@ def write_timedelta(td: datetime.timedelta) -> str:
         (7, "days"),
         (52.18, "weeks"),
     ]
-    remain = math.floor(td.total_seconds())
+    remain: float = math.floor(td.total_seconds())
     units = []
     for mult, unit in mults:
         in_unit, remain = reduce_time(mult, remain)
@@ -457,13 +410,15 @@ def write_timedelta(td: datetime.timedelta) -> str:
     return ", ".join(units[::-1])
 
 
-def set_fprops(path: p.PosixPath):
+def set_fprops(path: p.Path) -> None:
     os.chown(path, CLI_STATE.uid, CLI_STATE.gid)
     os.chmod(path, CLI_STATE.umask)
 
 
-@cache()
-def mediainfo(path: p.Path, typ: StreamType = None) -> list[dict[StreamProperty, str]]:
+@cache
+def mediainfo(
+    path: p.Path, typ: Optional[StreamType] = None
+) -> list[dict[StreamProperty, str]]:
     """
     Serialize the output of :code:`mediainfo --output=JSON ...`.
 
@@ -483,28 +438,45 @@ def mediainfo(path: p.Path, typ: StreamType = None) -> list[dict[StreamProperty,
         raise RuntimeError(mediainfo_err)
     try:
         file_json = json.loads(mediainfo_out)["media"]["track"]
-    except TypeError as e:
+    except TypeError:
         print(f"========================={path}=================")
         print("Full JSON Found")
         print(mediainfo_out.decode("utf-8"))
 
         # Force the list to keep building
-        fake_out = dict
-        fake_out["Format"] = None
+        fake_out: dict[StreamProperty, str] = dict()
         return [fake_out]
 
-    if typ == None:
+    if typ is None:
         return [file_json]
 
-    typ_json = list(filter(lambda obj: obj["@type"] == typ.name, file_json))
+    typ_json_dicts = list(filter(lambda obj: obj["@type"] == typ.name, file_json)) # type: ignore
     try:
-        typ_json = list(filter(lambda obj: float(obj["Duration"]) != 0, typ_json))
+        typ_json_dicts = list(
+            filter(lambda obj: float(obj["Duration"]) != 0, typ_json_dicts)
+        )
     except KeyError:
         pass
     if typ == StreamType.General:
-        if len(typ_json) != 1:
+        if len(typ_json_dicts) != 1:
             raise AssertionError(f"Number of '{typ}' objects in '{path}' is not one")
-    return typ_json
+
+    valid_prop_names = list(
+        map(
+            lambda enm: enm.name,
+            filter(lambda enm: typ in enm.get_valid_types(), list(StreamProperty)),
+        )
+    )
+
+    return [
+        {
+            StreamProperty[prop_name]: ""
+            if prop_name not in json_dict.keys()
+            else json_dict[prop_name]
+            for prop_name in valid_prop_names
+        }
+        for json_dict in typ_json_dicts
+    ]
 
 
 def write_to_width(
@@ -544,7 +516,6 @@ def print_to_width(
     init_gap: str = GAP,
     subs_gap: str = GAP,
     delim: str = "\n",
-    outstream: _io.TextIOWrapper = sys.stdout,
 ) -> None:
     """
     Print a string, wrapping to a certain width, with the
@@ -560,6 +531,7 @@ def print_to_width(
       (stdout by default).
     :returns: None
     """
+    outstream = sys.stdout
     outstream.write(
         write_to_width(
             string,
@@ -572,12 +544,11 @@ def print_to_width(
 
 
 def print_d(
-    *args,
+    *args: PS.args,
     verbosity_limit: int = 2,
     color: TermColor = TermColor.Blue,
-    inv=False,
-    bold=False,
-    outstream=sys.stdout,
+    inv: bool = False,
+    bold: bool = False,
 ) -> None:
     """
     Print a string in DEBUG mode, possibly above a certain verbosity.
@@ -597,6 +568,7 @@ def print_d(
     :type outstream: :class:`_io.TextIOWrapper`
     :returns: None
     """
+    outstream = sys.stdout
     if verbosity_limit > CLI_STATE.verbosity:
         return
     d_str = f"{GAP}  ---> "
@@ -619,11 +591,11 @@ def print_d(
         line = re.sub(d_str, f"{d_str}{next_escape}", line)
         line = re.sub(blank, f"{blank}{next_escape}", line)
         escapes = re.findall("\[[0-9];[0-9]{2}m", line)
-        last_escape_in_line = None
-        inner_color = None
+        last_escape_in_line = ""
+        inner_color = False
         if escapes:
             last_escape_in_line = escapes[-1]
-            inner_color = None
+            inner_color = False
             try:
                 inner_color = line.index(last_escape_in_line) > line.index("[0m")
             except ValueError:
@@ -652,7 +624,7 @@ def shorten_string(string: str, length: int) -> str:
     return string[: length - 3] + "..."
 
 
-def string_val_to_set(string) -> set[str]:
+def string_val_to_set(string: str) -> set[str]:
     """
     Convert the value of a :func:`mediainfo` json property to a set.
 
@@ -671,11 +643,13 @@ def string_val_to_set(string) -> set[str]:
     by_comma = string.split(",")
     if len(by_comma) > 1:
         key_pairs = list(map(lambda key_pair: key_pair.split(":"), by_comma))
-        return [set(key_val) for key_val in key_pairs]
+        return reduce(lambda x, y: x.union(y), [set(key_val) for key_val in key_pairs])
     return set(string.split(" "))
 
 
-def color_text(string: str, color: TermColor, inv=False, bold=False) -> str:
+def color_text(
+    string: str, color: TermColor, inv: bool = False, bold: bool = False
+) -> str:
     """
     Changes a string's color.
 
@@ -699,7 +673,7 @@ def color_text(string: str, color: TermColor, inv=False, bold=False) -> str:
     return escape_code + colors_preserved + return_code
 
 
-@cache()
+@cache
 def get_pairs(
     fname1: p.Path, fname2: p.Path, typ: StreamType
 ) -> list[tuple[dict[StreamProperty, str], dict[StreamProperty, str]]]:
@@ -715,40 +689,21 @@ def get_pairs(
     """
     f1 = mediainfo(fname1, typ)
     f2 = mediainfo(fname2, typ)
-    try:
-        return [(f1[ix], f2[ix]) for ix in range(len(f1))]
-    except IndexError:
-        raise TypeError(typ.name)
+    results = []
+    for ix in range(len(f1)):
+        try:
+            f1_dict = f1[ix]
+        except IndexError:
+            f1_dict = dict()
+        try:
+            f2_dict = f2[ix]
+        except IndexError:
+            f2_dict = dict()
+        results.append((f1_dict, f2_dict))
+    return results
 
 
-def get_pair_tests(
-    pairs: list[tuple[dict[StreamProperty, str], dict[StreamProperty, str]]]
-) -> list[StreamProperty]:
-    """
-    Convert the output of :func:`get_pairs` to a list of all
-      :class:`StreamProperty` values to test
-
-    :param pairs: A list obtained from :func:`get_pairs`, i.e.
-      a list of a particular :class:`StreamType`'s
-      :func:`mediainfo` output for both :code:`(fname1, fname2)`
-    """
-    # Convert dicts to keys:
-    # [({a: .., b: ..}, {a:, b:}), ({c:, d:}, {..})]
-    # => [(a: lst, b: lst), (c, d)]
-    result = list(
-        map(
-            lambda tup: tuple(map(lambda json_dict: list(json_dict), tup)),
-            pairs,
-        )
-    )
-    # Reduce all tuples: [(a: lst, b: lst), (c, d)] => [(a + b), (c + d)]
-    result = reduce(lambda x, y: x + y, result)
-    # Flatten => [a + b + c + d] (and remove duplicates, and sort)
-    result = sorted(set(reduce(lambda x, y: x + y, result)))
-    return result
-
-
-def compare_json_key(
+def compare_stream_property(
     pairs: list[tuple[dict[StreamProperty, str], dict[StreamProperty, str]]],
     key: StreamProperty,
     compare_func: Callable[[str, str], bool] = exact_match,
@@ -769,8 +724,6 @@ def compare_json_key(
     """
     olds = []
     news = []
-    if key == "extra":
-        return False
     try:
         olds = list(map(lambda x: x[0][key], pairs))
     except KeyError:
@@ -780,23 +733,29 @@ def compare_json_key(
     except KeyError:
         news = []
     try:
-        old_val = lambda ix: None if len(olds) <= ix else olds[ix]
-        new_val = lambda ix: None if len(news) <= ix else news[ix]
+
+        def possible_val(ix: int, lst: list[str]) -> str:
+            return "" if len(lst) <= ix else lst[ix]
+
         results = [
-            compare_func(old_val(ix), new_val(ix))
+            (
+                compare_func(possible_val(ix, olds), possible_val(ix, news)),
+                possible_val(ix, olds),
+                possible_val(ix, news),
+            )
             for ix in range(max(len(olds), len(news)))
         ]
     except AttributeError:
         return False
     except TypeError:
         return False
-    return all(results)
+    return all(map(lambda tup: tup[0], results))
 
 
-@cache()
+@cache
 def verify_conversion_tests(
     fname1: p.Path, fname2: p.Path
-) -> list[tuple[bool, StreamType, str]]:
+) -> list[tuple[bool, StreamType, StreamProperty]]:
     """
     Verify the conversion of a media file.
 
@@ -809,73 +768,18 @@ def verify_conversion_tests(
     if not (fname1.exists() and fname2.exists()):
         raise IOError("Comparison can't proceed because file doesn't exist.")
 
-    try:
-        general_pairs = get_pairs(fname1, fname2, StreamType.General)
-        video_pairs = get_pairs(fname1, fname2, StreamType.Video)
-        audio_pairs = get_pairs(fname1, fname2, StreamType.Audio)
-    except TypeError as e:
-        return [(False, StreamType[str(e)], "JSON length mismatch")]
-
-    # This is not planned to be permanent, except maybe it is
-    def all_tests_and_results(all_json_keys, pairs, typ):
-        results = []
-        for json_key in all_json_keys:
-            func = exact_match
-            try:
-                func = STREAM_PROP_COMPARE_FUNCS[(typ, json_key)]
-            except KeyError:
-                pass
-            result = compare_json_key(pairs, json_key, func)
-            get_vals = lambda ix: tuple(
-                filter(
-                    lambda x: x is not None,
-                    map(
-                        lambda vid_tup: vid_tup[ix][json_key]
-                        if json_key in vid_tup[ix]
-                        else None,
-                        pairs,
-                    ),
-                )
-            )
-            vid1_vals = get_vals(0)
-            vid2_vals = get_vals(1)
-            results.append((result, typ, json_key, vid1_vals, vid2_vals))
-        results = sorted(results, key=lambda tup: (-tup[0], tup[1]))
-        for result, typ, json_key, vid1_vals, vid2_vals in results:
-            color = TermColor.Green if result else TermColor.Red
-            print_d(
-                color_text(json_key, color),
-                shorten_string(vid1_vals, PRINT_WIDTH),
-                shorten_string(vid2_vals, PRINT_WIDTH),
-                verbosity_limit=1,
-            )
-        return results
-
-    general_pair_tests = get_pair_tests(general_pairs)
-    video_pair_tests = get_pair_tests(video_pairs)
-    audio_pair_tests = get_pair_tests(audio_pairs)
-
-    print_d("\n===GENERAL===", verbosity_limit=1)
-    gen_results = all_tests_and_results(
-        general_pair_tests, general_pairs, StreamType.General
-    )
-    print_d("\n===VIDEO===", verbosity_limit=1)
-    vid_results = all_tests_and_results(video_pair_tests, video_pairs, StreamType.Video)
-    print_d("\n===AUDIO===", verbosity_limit=1)
-    aud_results = all_tests_and_results(audio_pair_tests, audio_pairs, StreamType.Audio)
-
-    # tests_and_results = gen_results + vid_results + aud_results
-    # print(tests_and_results)
-
-    tests = STREAM_PROP_TESTS
+    tests = list(StreamProperty)
     if any(
-        map(lambda json: json["Format"] == "Opus", mediainfo(fname2, StreamType.Audio))
+        map(
+            lambda json: json[StreamProperty.Format] == "Opus",
+            mediainfo(fname2, StreamType.Audio),
+        )
     ):
         tests = list(
             filter(
-                lambda tup: not (
-                    tup[0] == StreamType.Audio
-                    and tup[1]
+                lambda prop: not (
+                    StreamType.Audio in prop.get_valid_types()
+                    and prop.name
                     in ["ChannelLayout", "ChannelPositions", "Channels", "FrameRate"]
                 ),
                 tests,
@@ -884,19 +788,28 @@ def verify_conversion_tests(
 
     results = list(
         map(
-            lambda typ_jsonkey: compare_json_key(
-                get_pairs(fname1, fname2, typ_jsonkey[0]),
-                typ_jsonkey[1],  # jsonkey
-                STREAM_PROP_COMPARE_FUNCS[typ_jsonkey]  # compare function
-                # get_pairs(fname1, fname2, typ_jsonkey[0]), *typ_jsonkey[1:]
+            lambda prop: list(
+                map(
+                    lambda typ: (
+                        compare_stream_property(
+                            get_pairs(fname1, fname2, typ),
+                            prop,
+                            prop.get_comparison_func(),
+                        ),
+                        typ,
+                        prop,
+                    ),
+                    prop.get_valid_types(),
+                )
             ),
             tests,
         )
     )
-    orig_results = [(results[ix], *tests[ix]) for ix in range(len(results))]
-    print(orig_results)
-
-    return [(results[ix], *tests[ix]) for ix in range(len(results))]
+    orig_results = []
+    for comparison_lst in results:
+        for comparison in comparison_lst:
+            orig_results.append(comparison)
+    return orig_results
 
 
 def verify_conversion(fname1: p.Path, fname2: p.Path) -> bool:
@@ -916,19 +829,19 @@ def failed_tests(fname1: p.Path, fname2: p.Path) -> str:
       and :code:`fname2` do not match on.
     """
     results = verify_conversion_tests(fname1, fname2)
-    result_tups: list[tuple[StreamType, str]] = list(
+    result_tups: list[tuple[StreamType, StreamProperty]] = list(
         map(lambda tup: tup[1:], filter(lambda x: not x[0], results))
     )
     pretty_results = "\n".join(
         map(
-            lambda tup: str(tup[0]) + ": " + color_text(tup[1], TermColor.Red),
+            lambda tup: str(tup[0]) + ": " + color_text(tup[1].name, TermColor.Red),
             result_tups,
         )
     )
     return pretty_results
 
 
-def get_converted_name(path: p.PosixPath) -> p.PosixPath:
+def get_converted_name(path: p.Path) -> p.Path:
     """
     Give the name used for the new file in the conversion of :code:`path`
     """
@@ -943,7 +856,7 @@ def is_skip_codec(path: p.PosixPath) -> bool:
     Whether the given file should not be converted, on the basis of its :code:`Format`.
     """
     vid_jsons = mediainfo(path, StreamType.Video)
-    codecs = list(map(lambda obj: obj["Format"], vid_jsons))
+    codecs = list(map(lambda obj: obj[StreamProperty.Format], vid_jsons))
     return any(map(lambda codec: codec in SKIP_CODECS, codecs))
 
 
@@ -954,14 +867,14 @@ def is_mp4_x265(path: p.PosixPath) -> bool:
     gen_json = mediainfo(path, StreamType.General)[0]
     container = None
     try:
-        container = gen_json["Format"]
-    except KeyError as e:
+        container = gen_json[StreamProperty.Format]
+    except KeyError:
         raise (ValueError(f"File {path} doesn't look like a video file"))
     if container != "MPEG-4":
         return False
     vid_jsons = mediainfo(path, StreamType.Video)
-    codecs = list(map(lambda obj: obj["Format"], vid_jsons))
-    codec_ids = list(map(lambda obj: obj["CodecID"], vid_jsons))
+    codecs = list(map(lambda obj: obj[StreamProperty.Format], vid_jsons))
+    codec_ids = list(map(lambda obj: obj[StreamProperty.CodecID], vid_jsons))
 
     return all(map(lambda codec: codec == "HEVC", codecs)) and all(
         map(lambda codec_id: codec_id == "hvc1" or codec_id == "hev1", codec_ids)
@@ -969,7 +882,7 @@ def is_mp4_x265(path: p.PosixPath) -> bool:
 
 
 def validate_streams_to_convert(
-    path: p.Path, typ: StreamType, num_packets=200
+    path: p.Path, typ: StreamType, num_packets: int = 200
 ) -> tuple[set[int], set[int]]:
     """
     Using :code:`ffprobe`, finds streams that will cause the x265 codec
@@ -997,7 +910,7 @@ def validate_streams_to_convert(
         "packet=stream_index,duration",
         "-of",
         "csv",
-        path,
+        str(path.absolute()),
     ]
     ffprobe_out = s.run(
         ffprobe_cmd,
@@ -1044,7 +957,7 @@ def validate_streams_to_convert(
 
 
 def generate_conversions(
-    path: p.PosixPath, typ: StreamType, validate=False
+    path: p.Path, typ: StreamType, validate: bool = False
 ) -> list[str]:
     """Given a file, generate the ffmpeg string to convert all subtitles
      appropriately.
@@ -1069,7 +982,7 @@ def generate_conversions(
 
       Example 1:
 
-      .. code-block::
+      .. code-block:: json
 
         {
           "@type": "Text",
@@ -1083,7 +996,7 @@ def generate_conversions(
 
       Example 2:
 
-      .. code-block::
+      .. code-block:: json
 
         {
           "@type": "Text",
@@ -1096,17 +1009,28 @@ def generate_conversions(
         $> ffmpeg ... -map 0:s:4 -c:s:4 mov_text ...
 
     """
+
+    def clean_stream_order(stream_order: str) -> str:
+        return stream_order if stream_order[:2] != "0-" else stream_order[2:]
+
     num_frames = 200
-    codec_ids = list(map(lambda typ_json: typ_json["CodecID"], mediainfo(path, typ)))
+    codec_ids = list(
+        map(lambda typ_json: typ_json[StreamProperty.CodecID], mediainfo(path, typ))
+    )
 
     if validate:
         all_stream_ixs, invalid_ixs = validate_streams_to_convert(
             path, typ, num_packets=num_frames
         )
     else:
-        invalid_ixs = []
+        invalid_ixs = set()
         all_stream_ixs = set(
-            map(lambda sub_json: int(sub_json["StreamOrder"]), mediainfo(path, typ))
+            map(
+                lambda sub_json: int(
+                    clean_stream_order(sub_json[StreamProperty.StreamOrder])
+                ),
+                mediainfo(path, typ),
+            )
         )
 
     # If 200 packets is too small, keep tryin'
@@ -1135,7 +1059,12 @@ def generate_conversions(
     # Only matters if validate is True (otherwise this is obviously
     # True)
     all_stream_ixs_json = set(
-        map(lambda sub_json: int(sub_json["StreamOrder"]), mediainfo(path, typ))
+        map(
+            lambda sub_json: int(
+                clean_stream_order(sub_json[StreamProperty.StreamOrder])
+            ),
+            mediainfo(path, typ),
+        )
     )
     print_d("typ, validate:", typ, validate, verbosity_limit=3)
     print_d(
@@ -1200,11 +1129,11 @@ def pprint_ffmpeg(path: p.Path) -> str:
     )
 
 
-@cache()
+@cache
 def ffmpeg_cmd(path: p.Path) -> list[str]:
     video_tracks = mediainfo(path, StreamType.Video)
-    heights = set(map(lambda track: track["Height"], video_tracks))
-    widths = set(map(lambda track: track["Width"], video_tracks))
+    heights = set(map(lambda track: track[StreamProperty.Height], video_tracks))
+    widths = set(map(lambda track: track[StreamProperty.Width], video_tracks))
 
     # assert len(heights) == 1 and len(widths) == 1
 
@@ -1212,15 +1141,16 @@ def ffmpeg_cmd(path: p.Path) -> list[str]:
     height = max(heights)
     width = max(widths)
 
-    audio_codec_ids = map(
-        lambda track: track["CodecID"], mediainfo(path, StreamType.Audio)
-    )
-
     # Without a duration field, validation will fail
     subtitles_have_duration = True
     subtitle_conversions = []
     try:
-        list(map(lambda track: track["Duration"], mediainfo(path, StreamType.Text)))
+        list(
+            map(
+                lambda track: track[StreamProperty.Duration],
+                mediainfo(path, StreamType.Text),
+            )
+        )
     except KeyError:
         subtitles_have_duration = False
     if subtitles_have_duration:
@@ -1254,11 +1184,11 @@ def ffmpeg_cmd(path: p.Path) -> list[str]:
 
 def process_vidlist(
     vidlist: [p.PosixPath],
-    limit=None,
-    convert_and_replace=True,
-    keep_failures=False,
-    just_list=False,
-    dry_run=False,
+    limit: int = None,
+    convert_and_replace: bool = True,
+    keep_failures: bool = False,
+    just_list: bool = False,
+    dry_run: bool = False,
 ) -> float:
     total_size_saved = 0
     limit = len(vidlist) if (limit is None) else min(len(vidlist), limit)
@@ -1270,8 +1200,6 @@ def process_vidlist(
         if num_processed >= limit:
             return total_size_saved
 
-        video_streams = mediainfo(cur_path, StreamType.Video)
-        video_formats = list(map(lambda stream: stream["Format"], video_streams))
         if is_mp4_x265(cur_path):
             continue
         if just_list:
@@ -1279,8 +1207,6 @@ def process_vidlist(
             continue
 
         new_path = get_converted_name(cur_path)
-        audio_streams = mediainfo(cur_path, StreamType.Audio)
-        text_streams = mediainfo(cur_path, StreamType.Text)
         format_string = "({:" + f"{limit_digits}d" + "}/{:d}) Processing {}"
 
         print_to_width(
@@ -1299,14 +1225,14 @@ def process_vidlist(
         )
         print()
         if is_skip_codec(cur_path):
-            print_to_width(color_text(f"AV1/VP9 file!", TermColor.Green))
+            print_to_width(color_text("AV1/VP9 file!", TermColor.Green))
             print()
             continue
 
         if os.path.exists(new_path):
-            print_to_width(f"Found existing conversion, verify then skip:")
+            print_to_width("Found existing conversion, verify then skip:")
             verified = verify_conversion(cur_path, new_path)
-            verif_color = (
+            verif_color: Callable[[str], str] = (
                 (lambda x: color_text(x, TermColor.Green))
                 if verified
                 else (lambda x: color_text(x, TermColor.Red))
@@ -1402,7 +1328,7 @@ def process_vidlist(
     return total_size_saved
 
 
-def human_readable(num, suffix="B") -> str:
+def human_readable(num: float, suffix: str = "B") -> str:
     for unit in ("", "Ki", "Mi", "Gi", "Ti", "Pi", "Ei", "Zi"):
         if abs(num) < 1024.0:
             return f"{num:3.1f}{unit}{suffix}"
@@ -1410,7 +1336,7 @@ def human_readable(num, suffix="B") -> str:
     return f"{num:.1f}Yi{suffix}"
 
 
-def find_compression_ratio(f1, f2):
+def find_compression_ratio(f1: p.Path, f2: p.Path) -> float:
     f1_size = os.path.getsize(f1)
     f2_size = os.path.getsize(f2)
     return 100 * f2_size / f1_size
@@ -1424,7 +1350,7 @@ def main() -> None:
     dry_run = CLI_STATE.dry_run
     num_files = CLI_STATE.num_files
     for key, val in CODEC_ID_MAP.items():
-        if val == None:
+        if val is None:
             CODEC_ID_MAP[key] = CLI_STATE.encoder
 
     # Process given files
@@ -1442,10 +1368,10 @@ def main() -> None:
 
     # Process given folders
     folders = list(filter(lambda x: x.is_dir(), CLI_STATE.FILES))
-    glob_folder = lambda path: reduce(
-        lambda x, y: x + y,
-        map(lambda ext: list(path.glob(f"**/*{ext}")), VIDEO_FILE_EXTS),
-    )
+
+    def glob_folder(path: p.Path) -> list[p.Path]:
+        return reduce(lambda x, y: x + y, map(lambda ext: list(path.glob(f"**/*{ext}")), VIDEO_FILE_EXTS))
+
     globbed = list(map(glob_folder, folders))
     accumulated_globs = []
     if globbed:
@@ -1456,7 +1382,7 @@ def main() -> None:
     # Start the clock
     orig_time = datetime.datetime.now()
 
-    files_and_sizes = list(map(lambda file: (file, os.path.getsize(file)), vid_list))
+    files_and_sizes: list[tuple[p.Path, int]] = list(map(lambda file: (file, os.path.getsize(file)), vid_list))
     files_and_sizes = sorted(files_and_sizes, key=lambda video_size: -video_size[1])
 
     videos = list(map(lambda video_size_tup: video_size_tup[0], files_and_sizes))
@@ -1488,7 +1414,7 @@ def main() -> None:
 
 if __name__ == "__main__":
 
-    def replace_space(string):
+    def replace_space(string: str) -> str:
         while "  " in string:
             string = string.replace("  ", "")
         while ";;" in string:
@@ -1615,9 +1541,9 @@ if __name__ == "__main__":
     main()
 
 
-def test_print_d_colors():
-    global DEBUG_VERBOSITY
-    DEBUG_VERBOSITY = 4
+def test_print_d_colors() -> None:
+    global CLI_STATE
+    CLI_STATE.verbosity = 4
     print_d(
         "hello "
         + color_text(CHECK, TermColor.Green)
@@ -1636,9 +1562,9 @@ def test_print_d_colors():
     )
 
 
-def test_print_d_mostly_plain():
-    global DEBUG_VERBOSITY
-    DEBUG_VERBOSITY = 4
+def test_print_d_mostly_plain() -> None:
+    global CLI_STATE
+    CLI_STATE.verbosity = 4
     print_d(
         "hello "
         + " something a bit longer "
