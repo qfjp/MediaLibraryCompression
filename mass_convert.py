@@ -114,7 +114,7 @@ class StreamType(Enum):
 # AV1_ENCODER = "libsvtav1"
 
 # Extensions of convertable files
-VIDEO_FILE_EXTS = set([".avi", ".mpg", ".mkv", ".webm", ".m4v", ".mp4"])
+VIDEO_FILE_EXTS = set([".avi", ".mpg", ".mkv", ".m2ts", ".webm", ".m4v", ".mp4"])
 MPEG4_EXTS = set([".m4v", ".mp4"])
 # OLD OLD Extensions, questionable quality
 QUESTIONABLE_EXTS = set([".avi", ".mpg"])
@@ -136,12 +136,15 @@ CODEC_ID_MAP = {
     "V_MPEGH/ISO/HEVC": None,
     "avc1": None,
     "XVID": None,
+    "27": None,  # Bluray for "x264"
     # Audio
     "A_EAC3": "copy",
     "A_DTS": "copy",
     "A_AC3": "copy",
     "ac-3": "copy",
     "2000": "copy",  # Found for AC-3 in an avi/xvid file
+    "131": "copy",  # Bluray for AC-3
+    "129": "copy",  # Bluray for AC-3
     "A_TRUEHD": "copy",
     "AAC": "copy",
     "A_AAC-2": "copy",
@@ -150,6 +153,7 @@ CODEC_ID_MAP = {
     "A_OPUS": "copy",
     # Subtitle
     "S_HDMV/PGS": "dvdsub",
+    "144": "dvdsub",  # Bluray for PGS
     "S_VOBSUB": "dvdsub",
     "S_TEXT/ASS": "mov_text",
     "S_TEXT/UTF8": "mov_text",
