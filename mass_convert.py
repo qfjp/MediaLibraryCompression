@@ -4,7 +4,6 @@ import _io  # type: ignore
 import argparse as ap
 import datetime
 import grp
-import humanize
 import json
 import math
 import os
@@ -14,13 +13,26 @@ import re
 import shutil
 import subprocess as s
 import sys
-
-from enum import Enum, unique, auto
+from enum import Enum, auto, unique
+from itertools import chain
 from textwrap import TextWrapper
-from typing import Callable, Optional, ParamSpec, TypeVar
-from functools import reduce
+from typing import (
+    Callable,
+    Iterable,
+    Literal,
+    Optional,
+    ParamSpec,
+    Self,
+    TextIO,
+    TypedDict,
+    TypeVar,
+    overload,
+)
 
-import ffpb  # type: ignore
+import ffpb  # type: ignore[import]
+import humanize
+from overrides import overrides
+from typing_extensions import Protocol
 
 os.nice(10)
 
@@ -468,23 +480,19 @@ def mediainfo(
     if typ is None:
         return [file_json]
 
-    typ_json_dicts = list(filter(lambda obj: obj["@type"] == typ.name, file_json)) # type: ignore
+    typ_json_dicts = [obj for obj in file_json if obj["@type"] == typ.name]
     try:
-        typ_json_dicts = list(
-            filter(lambda obj: float(obj["Duration"]) != 0, typ_json_dicts)
-        )
+        typ_json_dicts = [obj for obj in typ_json_dicts if float(obj["Duration"]) != 0]
     except KeyError:
         pass
     if typ == StreamType.General:
         if len(typ_json_dicts) != 1:
             raise AssertionError(f"Number of '{typ}' objects in '{path}' is not one")
 
-    valid_prop_names = list(
-        map(
-            lambda enm: enm.name,
-            filter(lambda enm: typ in enm.get_valid_types(), list(StreamProperty)),
-        )
-    )
+    valid_prop_names = [
+        enm.name
+        for enm in [enm for enm in list(StreamProperty) if typ in enm.get_valid_types()]
+    ]
 
     return [
         {
@@ -525,7 +533,7 @@ def write_to_width(
         subsequent_indent=subs_gap,
     )
     return delim.join(
-        list(map(lambda x: delim.join(wrapper.wrap(x)), string.splitlines(True)))
+        [delim.join(wrapper.wrap(line)) for line in string.splitlines(True)]
     )
 
 
@@ -660,8 +668,8 @@ def string_val_to_set(string: str) -> set[str]:
     """
     by_comma = string.split(",")
     if len(by_comma) > 1:
-        key_pairs = list(map(lambda key_pair: key_pair.split(":"), by_comma))
-        return reduce(lambda x, y: x.union(y), [set(key_val) for key_val in key_pairs])
+        key_pairs = [key_pair.split(":") for key_pair in by_comma]
+        return set(chain.from_iterable([set(key_val) for key_val in key_pairs]))
     return set(string.split(" "))
 
 
@@ -743,11 +751,11 @@ def compare_stream_property(
     olds = []
     news = []
     try:
-        olds = list(map(lambda x: x[0][key], pairs))
+        olds = [x[0][key] for x in pairs]
     except KeyError:
         olds = []
     try:
-        news = list(map(lambda x: x[1][key], pairs))
+        news = [x[1][key] for x in pairs]
     except KeyError:
         news = []
     try:
@@ -767,7 +775,7 @@ def compare_stream_property(
         return False
     except TypeError:
         return False
-    return all(map(lambda tup: tup[0], results))
+    return all([tup[0] for tup in results)
 
 
 @cache
@@ -788,41 +796,32 @@ def verify_conversion_tests(
 
     tests = list(StreamProperty)
     if any(
-        map(
-            lambda json: json[StreamProperty.Format] == "Opus",
-            mediainfo(fname2, StreamType.Audio),
-        )
+        json[StreamProperty.Format] == "Opus"
+        for json in mediainfo(fname2, StreamType.Audio)
     ):
-        tests = list(
-            filter(
-                lambda prop: not (
-                    StreamType.Audio in prop.get_valid_types()
-                    and prop.name
-                    in ["ChannelLayout", "ChannelPositions", "Channels", "FrameRate"]
-                ),
-                tests,
+        tests = [
+            prop
+            for prop in tests
+            if not (
+                StreamType.Audio in prop.get_valid_types()
+                and prop.name
+                in ["ChannelLayout", "ChannelPositions", "Channels", "FrameRate"]
             )
-        )
+        ]
 
-    results = list(
-        map(
-            lambda prop: list(
-                map(
-                    lambda typ: (
-                        compare_stream_property(
-                            get_pairs(fname1, fname2, typ),
-                            prop,
-                            prop.get_comparison_func(),
-                        ),
-                        typ,
-                        prop,
-                    ),
-                    prop.get_valid_types(),
-                )
-            ),
-            tests,
-        )
-    )
+    results = [
+        [
+            (
+                compare_stream_property(
+                    get_pairs(fname1, fname2, typ), prop, prop.get_comparison_func()
+                ),
+                typ,
+                prop,
+            )
+            for typ in prop.get_valid_types()
+        ]
+        for prop in tests
+    ]
     orig_results = []
     for comparison_lst in results:
         for comparison in comparison_lst:
@@ -837,8 +836,7 @@ def verify_conversion(fname1: p.Path, fname2: p.Path) -> bool:
     :returns: True if :code:`fname1` ~= :code:`fname2`
     """
     results = verify_conversion_tests(fname1, fname2)
-
-    return all(map(lambda tup: tup[0], results))
+    return all(tup[0] for tup in results)
 
 
 def failed_tests(fname1: p.Path, fname2: p.Path) -> str:
@@ -847,13 +845,11 @@ def failed_tests(fname1: p.Path, fname2: p.Path) -> str:
       and :code:`fname2` do not match on.
     """
     results = verify_conversion_tests(fname1, fname2)
-    result_tups: list[tuple[StreamType, StreamProperty]] = list(
-        map(lambda tup: tup[1:], filter(lambda x: not x[0], results))
-    )
+    result_tups: list[tuple[StreamType, StreamProperty]] = [
+        tup[1:] for tup in results if not tup[0]
+    ]
     pretty_results = "\n".join(
-        map(
-            lambda tup: str(tup[0]) + ": " + color_text(tup[1].name, TermColor.Red),
-            result_tups,
+        str(tup[0]) + ": " + color_text(tup[1].name, TermColor.Red)
         )
     )
     return pretty_results
@@ -874,8 +870,8 @@ def is_skip_codec(path: p.PosixPath) -> bool:
     Whether the given file should not be converted, on the basis of its :code:`Format`.
     """
     vid_jsons = mediainfo(path, StreamType.Video)
-    codecs = list(map(lambda obj: obj[StreamProperty.Format], vid_jsons))
-    return any(map(lambda codec: codec in SKIP_CODECS, codecs))
+    codecs = [obj[StreamProperty.Format] for obj in vid_jsons]
+    return any(codec in SKIP_CODECS for codec in codecs)
 
 
 def is_mp4_x265(path: p.PosixPath) -> bool:
@@ -891,11 +887,10 @@ def is_mp4_x265(path: p.PosixPath) -> bool:
     if container != "MPEG-4":
         return False
     vid_jsons = mediainfo(path, StreamType.Video)
-    codecs = list(map(lambda obj: obj[StreamProperty.Format], vid_jsons))
-    codec_ids = list(map(lambda obj: obj[StreamProperty.CodecID], vid_jsons))
-
-    return all(map(lambda codec: codec == "HEVC", codecs)) and all(
-        map(lambda codec_id: codec_id == "hvc1" or codec_id == "hev1", codec_ids)
+    codecs = [obj[StreamProperty.Format] for obj in vid_jsons]
+    codec_ids = [obj[StreamProperty.CodecID] for obj in vid_jsons]
+    return all(codec == "HEVC" for codec in codecs) and all(
+        codec_id == "hvc1" or codec_id == "hev1" for codec_id in codec_ids
     )
 
 
@@ -953,23 +948,19 @@ def validate_streams_to_convert(
         )
         raise RuntimeError(err)
 
-    ffprobe_stdout = list(
-        filter(
-            lambda packet_lst: len(packet_lst) == 3,
-            list(
-                map(
-                    lambda packet_str: packet_str.split(","),
-                    ffprobe_out.stdout.decode("utf-8").split("\n"),
-                )
-            ),
-        )
-    )
-    all_stream_ixs = set(map(lambda packet_lst: int(packet_lst[1]), ffprobe_stdout))
+    ffprobe_stdout = [
+        packet_lst
+        for packet_lst in [
+            packet_str.split(",")
+            for packet_str in ffprobe_out.stdout.decode("utf-8").split("\n")
+        ]
+        if len(packet_lst) == 3
+    ]
+    all_stream_ixs = set(int(packet_lst[1]) for packet_lst in ffprobe_stdout)
     invalid_ixs = set(
-        map(
-            lambda packet_lst: int(packet_lst[1]),
-            filter(lambda packet_lst: packet_lst[2] == "N/A", ffprobe_stdout),
-        )
+        int(packet_lst[1])
+        for packet_lst in ffprobe_stdout
+        if packet_lst[2] == "N/A"
     )
     return (all_stream_ixs, invalid_ixs)
 
@@ -1032,23 +1023,21 @@ def generate_conversions(
         return stream_order if stream_order[:2] != "0-" else stream_order[2:]
 
     num_frames = 200
-    codec_ids = list(
-        map(lambda typ_json: typ_json[StreamProperty.CodecID], mediainfo(path, typ))
-    )
+    codec_ids = [typ_json[StreamProperty.CodecID] for typ_json in mediainfo(path, typ)]
 
     if validate:
-        all_stream_ixs, invalid_ixs = validate_streams_to_convert(
-            path, typ, num_packets=num_frames
-        )
-    else:
+        try:
+            all_stream_ixs, invalid_ixs = validate_streams_to_convert(
+                path, typ, num_packets=num_frames
+            )
+        except RuntimeError as e:
+            print(e)
+            validate = False
+    if not validate:
         invalid_ixs = set()
         all_stream_ixs = set(
-            map(
-                lambda sub_json: int(
-                    clean_stream_order(sub_json[StreamProperty.StreamOrder])
-                ),
-                mediainfo(path, typ),
-            )
+            int(clean_stream_order(sub_json[StreamProperty.StreamOrder]))
+            for sub_json in mediainfo(path, typ)
         )
 
     # If 200 packets is too small, keep tryin'
@@ -1077,12 +1066,8 @@ def generate_conversions(
     # Only matters if validate is True (otherwise this is obviously
     # True)
     all_stream_ixs_json = set(
-        map(
-            lambda sub_json: int(
-                clean_stream_order(sub_json[StreamProperty.StreamOrder])
-            ),
-            mediainfo(path, typ),
-        )
+        int(clean_stream_order(sub_json[StreamProperty.StreamOrder]))
+        for sub_json in mediainfo(path, typ)
     )
     print_d("typ, validate:", typ, validate, verbosity_limit=3)
     print_d(
@@ -1133,8 +1118,8 @@ def pprint_ffmpeg(path: p.Path) -> str:
     delim = " \\ \n"
 
     return delim.join(
-        [
-            write_to_width(" ".join(lst[0:ix]), delim=delim),
+        (
+            write_to_width(" ".join(lst[0:ix]), delim=delim, width=width),
             2 * GAP + f"{lst[ix]}",
             write_to_width(
                 " ".join(lst[ix + 1 : -1]),
@@ -1143,17 +1128,15 @@ def pprint_ffmpeg(path: p.Path) -> str:
                 delim=delim,
             ),
             2 * GAP + f"{lst[-1]}",
-        ]
+        )
     )
 
 
 @cache
 def ffmpeg_cmd(path: p.Path) -> list[str]:
     video_tracks = mediainfo(path, StreamType.Video)
-    heights = set(map(lambda track: track[StreamProperty.Height], video_tracks))
-    widths = set(map(lambda track: track[StreamProperty.Width], video_tracks))
-
-    # assert len(heights) == 1 and len(widths) == 1
+    heights = set([track[StreamProperty.Height] for track in video_tracks])
+    widths = set([track[StreamProperty.Width] for track in video_tracks])
 
     # TODO: These may not be the same index
     height = max(heights)
@@ -1163,12 +1146,7 @@ def ffmpeg_cmd(path: p.Path) -> list[str]:
     subtitles_have_duration = True
     subtitle_conversions = []
     try:
-        list(
-            map(
-                lambda track: track[StreamProperty.Duration],
-                mediainfo(path, StreamType.Text),
-            )
-        )
+        [track[StreamProperty.Duration] for track in mediainfo(path, StreamType.Text)]
     except KeyError:
         subtitles_have_duration = False
     if subtitles_have_duration:
@@ -1232,13 +1210,15 @@ def process_vidlist(
             init_gap="",
             subs_gap=GAP,
         )
+        dir_prefix = "Dir: "
         print_to_width(
-            f"Dir: {cur_path.parent}",
-            subs_gap=GAP + "".join(map(lambda x: " ", "Dir: ")),
+            f"{dir_prefix}{cur_path.parent}",
+            subs_gap=GAP + "".join(" " for _ in dir_prefix),
         )
+        new_file_prefix = "New file: "
         print_to_width(
-            f"New file: {new_path}",
-            subs_gap=GAP + "".join(map(lambda x: " ", "New file: ")),
+            f"{new_file_prefix}{new_path}",
+            subs_gap=GAP + "".join(" " for _ in new_file_prefix),
             delim="\\ \n",
         )
         print()
@@ -1372,10 +1352,12 @@ def main() -> None:
             CODEC_ID_MAP[key] = CLI_STATE.encoder
 
     # Process given files
-    files = list(filter(lambda x: x.is_file(), CLI_STATE.FILES))
+    files = [file for file in CLI_STATE.FILES if file.is_file()]
     # Check if the files are media files
     nonmedia_files = set(
-        filter(lambda x: len(VIDEO_FILE_EXTS.intersection(set(x.suffixes))) == 0, files)
+        file
+        for file in files
+        if len(VIDEO_FILE_EXTS.intersection(set(file.suffixes))) == 0
     )
     if nonmedia_files:
         raise (
@@ -1385,25 +1367,31 @@ def main() -> None:
         )
 
     # Process given folders
-    folders = list(filter(lambda x: x.is_dir(), CLI_STATE.FILES))
+    folders = [file for file in CLI_STATE.FILES if file.is_dir()]
 
     def glob_folder(path: p.Path) -> list[p.Path]:
-        return reduce(lambda x, y: x + y, map(lambda ext: list(path.glob(f"**/*{ext}")), VIDEO_FILE_EXTS))
+        return list(
+            chain.from_iterable(
+                [list(path.glob(f"**/*{ext}")) for ext in VIDEO_FILE_EXTS]
+            )
+        )
 
     globbed = list(map(glob_folder, folders))
     accumulated_globs = []
     if globbed:
-        accumulated_globs = reduce(lambda x, y: x + y, globbed)
+        accumulated_globs = list(chain.from_iterable(globbed))
     vid_list = list(files) + accumulated_globs
     assert len(files) + len(folders) == len(CLI_STATE.FILES)
 
     # Start the clock
     orig_time = datetime.datetime.now()
 
-    files_and_sizes: list[tuple[p.Path, int]] = list(map(lambda file: (file, os.path.getsize(file)), vid_list))
+    files_and_sizes: list[tuple[p.Path, int]] = [
+        (file, os.path.getsize(file)) for file in vid_list
+    ]
     files_and_sizes = sorted(files_and_sizes, key=lambda video_size: -video_size[1])
 
-    videos = list(map(lambda video_size_tup: video_size_tup[0], files_and_sizes))
+    videos = [video_size_tup[0] for video_size_tup in files_and_sizes]
     total_size_saved = process_vidlist(
         videos,
         limit=num_files,
