@@ -161,12 +161,26 @@ CODEC_ID_MAP = {
 }
 
 
+def safer_float(string: str) -> float:
+    try:
+        return float(string)
+    except ValueError:
+        return 0
+
+
+def safer_int(string: str) -> int:
+    try:
+        return int(string)
+    except ValueError:
+        return 0
+
+
 def exact_match(x: str, y: str) -> bool:
     return x == y
 
 
 def exact_int(x: str, y: str) -> bool:
-    return int(x) == int(y)
+    return safer_int(x) == safer_int(y)
 
 
 def set_match(x: str, y: str) -> bool:
@@ -174,19 +188,19 @@ def set_match(x: str, y: str) -> bool:
 
 
 def almost_int(x: str, y: str) -> bool:
-    return math.fabs(int(x) - int(y)) <= 1
+    return math.fabs(safer_int(x) - safer_int(y)) <= 1
 
 
 def fuzzy_int(x: str, y: str) -> bool:
-    return math.fabs(int(x) - int(y)) <= INT_TOLERANCE
+    return math.fabs(safer_int(x) - safer_int(y)) <= INT_TOLERANCE
 
 
 def fuzzy_float(x: str, y: str) -> bool:
-    return math.fabs(float(x) - float(y)) <= FLOAT_TOLERANCE
+    return math.fabs(safer_float(x) - safer_float(y)) <= FLOAT_TOLERANCE
 
 
 def fuzziest_float(x: str, y: str) -> bool:
-    return math.fabs(float(x) - float(y)) <= INT_TOLERANCE
+    return math.fabs(safer_float(x) - safer_float(y)) <= FUZZIEST_TOLERANCE
 
 
 def matches(match_str: str) -> Callable[[str, str], bool]:
