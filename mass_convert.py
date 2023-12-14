@@ -1721,7 +1721,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "-e",
         "--encoder",
-        choices=["libx265", "hevc_nvenc", "libsvt_hevc"],
+        choices=[
+            "libx265",
+            "hevc_nvenc",
+            "libsvt_hevc",
+            "hevc_v4l2m2m",
+            "hevc_vaapi",
+            "hevc_qsv",
+        ],
         default="libx265",
         help="The video encoder to use.",
     )
