@@ -264,6 +264,15 @@ def fuzziest_float(x: str, y: str) -> bool:
     return math.fabs(safer_float(x) - safer_float(y)) <= FUZZIEST_TOLERANCE
 
 
+def scantype_compare(x: str, y: str) -> bool:
+    orig = x.lower()
+    new = y.lower()
+
+    return (new == "progressive") or (
+        orig in ["mbaff", "interlaced"] and new in ["mbaff", "interlaced"]
+    )
+
+
 X = TypeVar("X")
 Y = TypeVar("Y")
 
@@ -461,7 +470,7 @@ class StreamProperty(Enum):
     PixelAspectRatio = (set([StreamType.Video]), exact_match, auto())
     Sampled_Height = (set([StreamType.Video]), exact_int, auto())
     Sampled_Width = (set([StreamType.Video]), exact_int, auto())
-    ScanType = (set([StreamType.Video]), matches("Progressive"), auto())
+    ScanType = (set([StreamType.Video]), scantype_compare, auto())
     Width = (set([StreamType.Video]), exact_int, auto())
     ChannelLayout = (set([StreamType.Audio]), set_match, auto())
     ChannelPositions = (set([StreamType.Audio]), set_match, auto())
