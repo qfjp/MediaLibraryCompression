@@ -20,7 +20,6 @@ from typing import (
     Literal,
     Optional,
     ParamSpec,
-    Self,
     TextIO,
     TypedDict,
     TypeVar,
@@ -30,7 +29,6 @@ from typing import (
 import ffpb  # type: ignore[import]
 import humanize
 from overrides import overrides
-from typing_extensions import Protocol
 
 os.nice(10)
 
