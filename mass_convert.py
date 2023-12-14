@@ -55,6 +55,8 @@ class CliState:
     verbosity: int
     umask: int
     list_files: bool
+    exact: bool
+    no_color: bool
     keep_failures: bool
     keep_original: bool
     dry_run: bool
@@ -351,6 +353,15 @@ class TermColor(Enum):
     White = 7
 
 
+class SwitchDefaults(TypedDict):
+    verbosity_limit: int
+    color: TermColor
+    exact: bool
+    inv: bool
+    bold: bool
+    outstream: TextIO
+
+
 def cache(func: Callable[PS, R]) -> Callable[PS, R]:
     """
     A function wrapper that causes a function's results to be memoized
@@ -568,10 +579,7 @@ def print_to_width(
 
 def print_d(
     *args: PS.args,
-    verbosity_limit: int = 2,
-    color: TermColor = TermColor.Blue,
-    inv: bool = False,
-    bold: bool = False,
+    **kwargs: PS.kwargs,
 ) -> None:
     """
     Print a string in DEBUG mode, possibly above a certain verbosity.
@@ -591,6 +599,46 @@ def print_d(
     :type outstream: :class:`TextIO`
     :returns: None
     """
+    defaults: SwitchDefaults = {
+        "verbosity_limit": 1,
+        "color": TermColor.Blue,
+        "exact": False,
+        "inv": False,
+        "bold": False,
+        "outstream": sys.stdout,
+    }
+
+    @overload
+    def get_kwarg(key: Literal["exact"]) -> bool:
+        return get_kwarg(key)
+
+    @overload
+    def get_kwarg(key: Literal["verbosity_limit"]) -> int:
+        return get_kwarg(key)
+
+    @overload
+    def get_kwarg(key: Literal["color"]) -> TermColor:
+        return get_kwarg(key)
+
+    @overload
+    def get_kwarg(key: Literal["inv", "bold"]) -> bool:
+        return get_kwarg(key)
+
+    @overload
+    def get_kwarg(key: Literal["outstream"]) -> TextIO:
+        return get_kwarg(key)
+
+    def get_kwarg(
+        key: Literal["verbosity_limit", "color", "inv", "bold", "outstream", "exact"],
+    ) -> object:
+        return defaults[key] if key not in kwargs.keys() else kwargs[key]
+
+    verbosity_limit = get_kwarg("verbosity_limit")
+    color = get_kwarg("color")
+    inv = get_kwarg("inv")
+    bold = get_kwarg("bold")
+    outstream = get_kwarg("outstream")
+
     if verbosity_limit > CLI_STATE.verbosity:
         return
     d_str = f"{GAP}  ---> "
@@ -683,6 +731,8 @@ def color_text(
     :returns: The string, wrapped with ANSI terminal codes for the given color text.
     :rtype: str
     """
+    if CLI_STATE.no_color:
+        return string
     color_val = color.value
     color_prefix = 4 if inv else 3
     bold_code = 1 if bold else 0
@@ -1176,14 +1226,28 @@ def ffmpeg_cmd(path: p.Path) -> list[str]:
 
 def process_vidlist(
     vidlist: [p.PosixPath],
-    limit: int = None,
+    exact: bool = False,
+    mayb_limit: Optional[int] = None,
     convert_and_replace: bool = True,
     keep_failures: bool = False,
     just_list: bool = False,
     dry_run: bool = False,
 ) -> float:
     total_size_saved = 0
-    limit = len(vidlist) if (limit is None) else min(len(vidlist), limit)
+    limit = len(vidlist) if mayb_limit is None else min(len(vidlist), mayb_limit)
+    exact_limit = 0
+    if limit < 10:
+        exact = True
+
+    if exact:
+        for file in vidlist:
+            if is_already_converted(file):
+                continue
+            if exact_limit > limit:
+                break
+            exact_limit += 1
+        limit = min(limit, exact_limit)
+
     limit_digits = len(f"{limit}")
 
     num_processed = 0
@@ -1338,6 +1402,7 @@ def find_compression_ratio(f1: p.Path, f2: p.Path) -> float:
 
 def main() -> None:
     # Retrieve the program state from arguments
+    exact = CLI_STATE.exact
     just_list = CLI_STATE.list_files
     keep_failures = CLI_STATE.keep_failures
     replace = not CLI_STATE.keep_original
@@ -1390,7 +1455,8 @@ def main() -> None:
     videos = [video_size_tup[0] for video_size_tup in files_and_sizes]
     total_size_saved = process_vidlist(
         videos,
-        limit=num_files,
+        exact=exact,
+        mayb_limit=num_files,
         convert_and_replace=replace,
         just_list=just_list,
         keep_failures=keep_failures,
@@ -1460,6 +1526,13 @@ if __name__ == "__main__":
         help="The video encoder to use.",
     )
     parser.add_argument(
+        "-x",
+        "--exact",
+        action="store_true",
+        help="""Calculate the exact number of files that will be converted
+This is automatically set to true if the number of files is smaller than 10""",
+    )
+    parser.add_argument(
         "-o",
         "--keep-original",
         action="store_true",
@@ -1483,6 +1556,7 @@ if __name__ == "__main__":
         action="store_true",
         help="Do everything in a normal run, except convert and verify (Useful for finding ffmpeg args).",
     )
+    parser.add_argument("--no-color", action="store_true")
     parser.add_argument(
         "-v",
         "--verbosity",
