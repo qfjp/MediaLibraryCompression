@@ -160,7 +160,9 @@ CODEC_ID_MAP = {
     "mp4a-40-2": "copy",
     "A_MPEG/L3": "copy",
     "A_OPUS": "copy",
+    "A_FLAC": "copy",
     # Subtitle
+    "S_DVBSUB": "dvdsub",
     "S_HDMV/PGS": "dvdsub",
     "144": "dvdsub",  # Bluray for PGS
     "S_VOBSUB": "dvdsub",
