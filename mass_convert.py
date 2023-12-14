@@ -11,10 +11,12 @@ import re
 import shutil
 import subprocess as s
 import sys
+import types
 from enum import Enum, auto, unique
 from itertools import chain
 from textwrap import TextWrapper
 from typing import (
+    Any,
     Callable,
     Iterable,
     Literal,
@@ -91,7 +93,7 @@ class CliState:
 
 
 class UMask:
-    def __init__(self, string: str):
+    def __init__(self, string: str) -> None:
         """
         :param string: An octal umask (string of 3 or 4 numbers, from 0 to 7).
         """
@@ -330,12 +332,11 @@ GAP = "    "
 
 PS = ParamSpec("PS")
 R = TypeVar("R")
-
-GEN_CACHE: dict[str, dict[PS, R]] = dict()
+GEN_CACHE: dict[str, dict[Iterable[Any], Any]] = dict()  # type: ignore[misc]
 
 
 class ExtraClassProperty:
-    def __init__(self, *args: PS.args, **kwargs: PS.kwargs):
+    def __init__(self, *args: PS.args, **kwargs: PS.kwargs) -> None:
         self.prop_list = args + tuple((key, kwargs[key]) for key in kwargs)
 
 
@@ -405,23 +406,37 @@ class StreamProperty(Enum):
     """
 
     # These need an ordering and a hash to be able to be placed in a set
-    def __gt__(self, other):  # type: ignore
+    @overrides
+    def __gt__(self, other: object) -> bool:
+        if not isinstance(other, StreamProperty):
+            return NotImplemented
         return self.name > other.name
 
-    def __lt__(self, other):  # type: ignore
+    @overrides
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, StreamProperty):
+            return NotImplemented
         return self.name < other.name
 
-    def __eq__(self, other):  # type: ignore
+    @overrides
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, StreamProperty):
+            return NotImplemented
         return self.name == other.name
 
-    def __hash__(self):  # type: ignore
+    @overrides
+    def __hash__(self) -> int:
         return self.name.__hash__()
 
     def get_valid_types(self) -> set[StreamType]:
-        return self.value[0]  # type: ignore
+        if not isinstance(self.value[0], set):
+            return NotImplemented
+        return self.value[0]
 
     def get_comparison_func(self) -> Callable[[str, str], bool]:
-        return self.value[1]  # type: ignore
+        if not isinstance(self.value[1], types.FunctionType):
+            return NotImplemented
+        return self.value[1]
 
     ## These tests tend to fail:
     # FrameCount = (set([StreamType.General, StreamType.Video]), almost_int)
@@ -503,6 +518,71 @@ class SwitchDefaults(TypedDict):
     outstream: TextIO
 
 
+def cache_choice(
+    mayb_cache_dict: Optional[dict[str, dict[Iterable[X], R]]],
+) -> Callable[[Callable[PS, R]], Callable[PS, R]]:
+    """
+    A function wrapper that causes a function's results to be memoized
+
+    Results are stored to a default dictionary, but you can supply your
+    own cache dictionary if it's necessary to keep separate caches.
+
+    :param dict cache_dict: The structure that acts as the cache. Any
+      data structure with the same interface as a dictionary can be
+      used (e.g. a splay tree with the proper functions might improve
+      performance)
+    """
+    cache_dict = mayb_cache_dict if mayb_cache_dict is not None else GEN_CACHE
+
+    def inner(func: Callable[PS, R]) -> Callable[PS, R]:
+        def wrapper(*args: PS.args, **kwargs: PS.kwargs) -> R:
+            func_name = func.__name__
+            arg_tuple: PS.args = args
+            kwarg_pairs = tuple((key, kwargs[key]) for key in kwargs)
+            try:
+                return cache_dict[func_name][arg_tuple + kwarg_pairs]  # type: ignore[no-any-return]
+            except KeyError:
+                pass
+
+            # printable stuff
+            dict_string = tuple(
+                f"{key}='{kwargs[key]}'"
+                if isinstance(kwargs[key], str | p.Path)
+                else f"{key}={kwargs[key]}"
+                for key in kwargs
+            )
+            arg_string = tuple(
+                f"'{s}'" if isinstance(s, p.Path | str) else str(s) for s in args
+            )
+            arg_dict_string = ", ".join(arg_string + dict_string)
+            print_d(
+                f"Caching result for {func_name}({arg_dict_string})",
+            )
+
+            # real stuff
+            result = func(*args, **kwargs)
+            try:
+                cache_dict[func_name][arg_tuple + kwarg_pairs] = result
+            except KeyError:
+                cache_dict[func_name] = dict()
+                cache_dict[func_name][arg_tuple + kwarg_pairs] = result
+            print_d(type(cache_dict))
+            print_d(type(func_name))
+            print_d(arg_tuple + kwarg_pairs)
+
+            print_d("=================================")
+
+            return result
+
+        wrapper.__doc__ = func.__doc__
+        wrapper.__annotations__ = func.__annotations__
+        wrapper.__name__ = func.__name__
+
+        return wrapper
+
+    return inner
+
+
 def cache(func: Callable[PS, R]) -> Callable[PS, R]:
     """
     A function wrapper that causes a function's results to be memoized
@@ -521,7 +601,7 @@ def cache(func: Callable[PS, R]) -> Callable[PS, R]:
         arg_tuple: PS.args = args
         kwarg_pairs = tuple((key, kwargs[key]) for key in kwargs)
         try:
-            return GEN_CACHE[func_name][arg_tuple + kwarg_pairs]
+            return GEN_CACHE[func_name][arg_tuple + kwarg_pairs]  # type: ignore[no-any-return]
         except KeyError:
             pass
         dict_args = tuple(f"{key}={kwargs[key]}" for key in kwargs)
@@ -593,8 +673,8 @@ def set_fprops(path: p.Path) -> None:
     os.chmod(path, CLI_STATE.umask)
 
 
-@cache
-def mediainfo(
+@cache_choice(GEN_CACHE)
+def mediainfo(  # type: ignore[misc]
     path: p.Path, typ: Optional[StreamType] = None
 ) -> list[dict[StreamProperty, str]]:
     """
@@ -887,8 +967,8 @@ def color_text(
     return escape_code + colors_preserved + return_code
 
 
-@cache
-def get_pairs(
+@cache_choice(GEN_CACHE)
+def get_pairs(  # type: ignore[misc]
     fname1: p.Path, fname2: p.Path, typ: StreamType
 ) -> list[tuple[dict[StreamProperty, str], dict[StreamProperty, str]]]:
     """
@@ -970,8 +1050,8 @@ def compare_stream_property(
     return (len(bad_results) == 0, bad_results)
 
 
-@cache
-def verify_conversion_tests(
+@cache_choice(GEN_CACHE)
+def verify_conversion_tests(  # type: ignore[misc]
     fname1: p.Path, fname2: p.Path
 ) -> list[tuple[bool, StreamType, StreamProperty, list[StreamPropSingleCompareResult]]]:
     """
@@ -1072,7 +1152,7 @@ def get_converted_name(path: p.Path) -> p.Path:
         return path.with_suffix(f".{COLLISION_SUFFIX}{path.suffix}")
 
 
-def is_skip_codec(path: p.PosixPath) -> bool:
+def is_skip_codec(path: p.Path) -> bool:
     """
     Whether the given file should not be converted, on the basis of its :code:`Format`.
     """
@@ -1324,7 +1404,7 @@ def generate_conversions(
     return encoding_args
 
 
-def pprint_ffmpeg(path: p.Path) -> str:
+def pprint_ffmpeg(path: p.Path, width: int = 0) -> str:
     """
     Pretty print the ffmpeg command that will be used to convert the
     given file.
@@ -1353,8 +1433,8 @@ def pprint_ffmpeg(path: p.Path) -> str:
     )
 
 
-@cache
-def ffmpeg_cmd(path: p.Path, skip_subs: bool = False) -> list[str]:
+@cache_choice(GEN_CACHE)
+def ffmpeg_cmd(path: p.Path, skip_subs: bool = False) -> list[str]:  # type: ignore[misc]
     video_tracks = mediainfo(path, typ=StreamType.Video)
     heights = set([track[StreamProperty.Height] for track in video_tracks])
     widths = set([track[StreamProperty.Width] for track in video_tracks])
