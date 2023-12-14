@@ -274,6 +274,42 @@ class ExtraClassProperty:
         self.prop_list = args + tuple((key, kwargs[key]) for key in kwargs)
 
 
+class StreamPropSingleCompareResult:
+    """
+    Given two media files, this is the difference of a StreamProperty
+    over a single Stream, where the Stream is the same type order
+    between the files.
+
+    For example, given two files with streams
+
+    .. code-block:: json
+
+    {
+      Video: {TypeOrder: 1},
+      Audio: {TypeOrder: 1},
+      Audio: {TypeOrder: 2},
+      Text: {TypeOrder: 1}
+    }
+
+    A proper comparison should result in sets of 4
+    :py:class:`StreamPropSingleCompareResult`s, one for each
+    :py:class:`StreamProperty`. Ultimately, these will be collected into
+    :py:class:`StreamPropCompareResult`s, the full collection of which
+    stores all the information needed to validate a conversion.
+    """
+
+    def __init__(self, type_order: int, f1_json_val: str, f2_json_val: str) -> None:
+        self.type_order = type_order
+        self.f1_json_val = f1_json_val
+        self.f2_json_val = f2_json_val
+
+    def __str__(self) -> str:
+        return f"StreamPropSingleCompareResult({self.type_order}, {self.f1_json_val}, {self.f2_json_val})"
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
+
 @unique
 class StreamProperty(Enum):
     """
@@ -819,7 +855,7 @@ def compare_stream_property(
     pairs: list[tuple[dict[StreamProperty, str], dict[StreamProperty, str]]],
     key: StreamProperty,
     compare_func: Callable[[str, str], bool] = exact_match,
-) -> bool:
+) -> tuple[bool, list[StreamPropSingleCompareResult]]:
     """
     Compare the values of :func:`mediainfo`'s output.
 
@@ -852,30 +888,34 @@ def compare_stream_property(
         results = [
             (
                 compare_func(possible_val(ix, olds), possible_val(ix, news)),
-                possible_val(ix, olds),
-                possible_val(ix, news),
+                StreamPropSingleCompareResult(
+                    ix + 1,
+                    possible_val(ix, olds),
+                    possible_val(ix, news),
+                ),
             )
             for ix in range(max(len(olds), len(news)))
         ]
     except AttributeError:
-        return False
+        return (False, [])
     except TypeError:
-        return False
-    return all([tup[0] for tup in results)
+        return (False, [])
+    bad_results = [tup[1] for tup in results if not tup[0]]
+    return (len(bad_results) == 0, bad_results)
 
 
 @cache
 def verify_conversion_tests(
     fname1: p.Path, fname2: p.Path
-) -> list[tuple[bool, StreamType, StreamProperty]]:
+) -> list[tuple[bool, StreamType, StreamProperty, list[StreamPropSingleCompareResult]]]:
     """
     Verify the conversion of a media file.
 
     :param p.Path fname1: The original media file
     :param p.Path fname2: The converted media file
-    :returns: A list of tests and their results, in the form of a
-      tuple as (`result`, `stream type`, `mediainfo json key`)
-    :rtype: list[tuple[bool, StreamType, str]]
+    :returns: A list of failed tests and their results as a tuple where the entries are as follows:
+        (result (always false), type of stream, property to compare, stream indices, mismatched output)
+    :rtype: list[tuple[bool, StreamType, StreamProperty, list[StreamPropSingleCompareResult]]]
     """
     if not (fname1.exists() and fname2.exists()):
         raise IOError("Comparison can't proceed because file doesn't exist.")
@@ -910,8 +950,9 @@ def verify_conversion_tests(
     ]
     orig_results = []
     for comparison_lst in results:
-        for comparison in comparison_lst:
-            orig_results.append(comparison)
+        for value_and_compare_results, typ, prop in comparison_lst:
+            verified, cmp_result = value_and_compare_results
+            orig_results.append((verified, typ, prop, cmp_result))
     return orig_results
 
 
@@ -931,12 +972,25 @@ def failed_tests(fname1: p.Path, fname2: p.Path) -> str:
       and :code:`fname2` do not match on.
     """
     results = verify_conversion_tests(fname1, fname2)
-    result_tups: list[tuple[StreamType, StreamProperty]] = [
-        tup[1:] for tup in results if not tup[0]
-    ]
+    result_tups: list[
+        tuple[StreamType, StreamProperty, list[StreamPropSingleCompareResult]]
+    ] = [tup[1:] for tup in results if not tup[0]]
     pretty_results = "\n".join(
-        str(tup[0]) + ": " + color_text(tup[1].name, TermColor.Red)
+        tup[0].name
+        + "."
+        + tup[1].name
+        + str([comparison.type_order for comparison in tup[2]])
+        + ": "
+        + color_text(
+            str(
+                [
+                    (comparison.f1_json_val, comparison.f2_json_val)
+                    for comparison in tup[2]
+                ]
+            ),
+            TermColor.Red,
         )
+        for tup in result_tups
     )
     return pretty_results
 
