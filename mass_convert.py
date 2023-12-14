@@ -247,7 +247,6 @@ def matches(match_str: str) -> Callable[[str, str], bool]:
     return lambda _, y: y == match_str
 
 
-INT_TOLERANCE = 6
 def convert_bytes(bytes: float) -> str:
     exp = 1
     while bytes % (1024**exp) < bytes:
@@ -257,8 +256,9 @@ def convert_bytes(bytes: float) -> str:
     return "{:.2f} {}iB".format(bytes / (1024**exp), suffixes[exp])
 
 
-INT_TOLERANCE = 6
+INT_TOLERANCE = 7
 FLOAT_TOLERANCE = 0.2
+FUZZIEST_TOLERANCE = INT_TOLERANCE + FLOAT_TOLERANCE
 CROSS = "✖"
 CHECK = "✔"
 GAP = "    "
