@@ -247,6 +247,33 @@ def const_true(x: X, y: Y) -> bool:
     return True
 
 
+def is_sequential(st: set[int]) -> bool:
+    """
+    Tests if a given set of integers holds is equivalent to [min, max],
+    inclusive.
+    """
+    if len(st) == 0 or len(st) == 1:
+        return True
+    test_sorted = sorted(st)
+    first_item = test_sorted[0]
+    for ix, item in enumerate(test_sorted):
+        if first_item + ix != item:
+            return False
+    return True
+
+
+def sequentialize(st: set[int]) -> set[int]:
+    """
+    For a given set of integers, returns a set of the same size that is
+    sequential and begins at the minimum value.
+    """
+    if is_sequential(st):
+        return st
+    size = len(st)
+    start = min(st)
+    return set(range(start, start + size))
+
+
 def matches(match_str: str) -> Callable[[str, str], bool]:
     return lambda _, y: y == match_str
 
@@ -1227,9 +1254,8 @@ def generate_conversions(
         )
 
     valid_stream_ixs = all_stream_ixs.difference(invalid_ixs)
-    print_d("valid, invalid:", valid_stream_ixs, invalid_ixs, verbosity_limit=3)
-
-    num_codecs_so_far = 0
+    valid_stream_ixs = sequentialize(valid_stream_ixs)
+    invalid_ixs = sequentialize(invalid_ixs)
     encoding_args = []
     try:
         offset = min(all_stream_ixs)
@@ -1237,6 +1263,7 @@ def generate_conversions(
         offset = 0
     for num_codecs_so_far, stream_ix in enumerate(valid_stream_ixs):
         type_ix = stream_ix - offset
+        # TODO: Fix for when audio stream ix's > video's
         codec_id = codec_ids[type_ix]
         encoding = None
         encoding = CODEC_ID_MAP[codec_id]
@@ -1280,7 +1307,7 @@ def pprint_ffmpeg(path: p.Path) -> str:
 
 
 @cache
-def ffmpeg_cmd(path: p.Path) -> list[str]:
+def ffmpeg_cmd(path: p.Path, skip_subs: bool = False) -> list[str]:
     video_tracks = mediainfo(path, typ=StreamType.Video)
     heights = set([track[StreamProperty.Height] for track in video_tracks])
     widths = set([track[StreamProperty.Width] for track in video_tracks])
@@ -1306,25 +1333,25 @@ def ffmpeg_cmd(path: p.Path) -> list[str]:
     else:
         subtitle_conversions = generate_conversions(path, StreamType.Text)
 
-    cmd = (
-        [
-            "ffmpeg",
-            "-canvas_size",
-            f"{width}x{height}",
-            "-i",
-            f"{path}",
-            "-movflags",
-            "+faststart",
-            "-map_metadata",
-            "0",
-            "-strict",
-            "-2",
-        ]
-        + generate_conversions(path, StreamType.Video)
-        + generate_conversions(path, StreamType.Audio)
-        + subtitle_conversions
-        + [str(get_converted_name(path))]
-    )
+    cmd = [
+        "ffmpeg",
+        "-fix_sub_duration",
+        "-canvas_size",
+        f"{width}x{height}",
+        "-i",
+        f"{path}",
+        "-movflags",
+        "+faststart",
+        "-map_metadata",
+        "0",
+        "-strict",
+        "-2",
+    ]
+    cmd += generate_conversions(path, StreamType.Video)
+    cmd += generate_conversions(path, StreamType.Audio)
+    if not skip_subs:
+        cmd += subtitle_conversions
+    cmd += [str(get_converted_name(path))]
     return cmd
 
 
@@ -1417,10 +1444,18 @@ def process_vidlist(
         print()
 
         if dry_run:
+            num_processed += 1
             continue
 
         before = datetime.datetime.now()
-        ffpb.main(argv=ffmpeg_proc_str[1:], stream=sys.stderr)
+        ffmpeg_return_code = ffpb.main(argv=ffmpeg_proc_str[1:], stream=sys.stderr)
+        if ffmpeg_return_code != 0:
+            print_to_width(f"{color_text(CROSS, TermColor.Red)} ffmpeg Failed")
+            print_to_width("---")
+            print_to_width("Retrying without subtitles")
+            os.remove(new_path)
+            ffmpeg_proc_str = ffmpeg_cmd(cur_path, skip_subs=True)
+            ffmpeg_return_code = ffpb.main(argv=ffmpeg_proc_str[1:], stream=sys.stderr)
         after = datetime.datetime.now()
         time_taken = after - before
         print_to_width(f"Conversion Runtime: {write_timedelta(time_taken)}")
