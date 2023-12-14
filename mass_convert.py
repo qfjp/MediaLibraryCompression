@@ -26,10 +26,36 @@ from typing import (
     overload,
 )
 
-import ffpb  # type: ignore[import]
+import ffpb  # type: ignore[import-untyped]
 from overrides import overrides
 
 os.nice(10)
+
+
+@unique
+class VidContainer(Enum):
+    Matroska = auto()
+    MPEG_4 = auto()
+    _valid_exts = {MPEG_4: set([".mp4", ".mpv"]), Matroska: set([".mkv"])}
+    _output_exts = {MPEG_4: ".mp4", Matroska: ".mkv"}
+    _medianfo_container_names = {MPEG_4: "MPEG-4", Matroska: "Matroska"}
+
+    @classmethod
+    def _missing_(cls, name):  # type: ignore[misc, no-untyped-def]
+        name = name.lower().replace("-", "_")
+        if name == "matroska":
+            return cls.Matroska
+        if name == "mpeg4" or name == "mpeg-4":
+            return cls.MPEG_4
+
+    def valid_exts(self) -> set[str]:
+        return self._valid_exts.value[self.value]  # type: ignore[attr-defined, no-any-return]
+
+    def output_ext(self) -> str:
+        return self._output_exts.value[self.value]  # type: ignore[attr-defined, no-any-return]
+
+    def json_name(self) -> str:
+        return self._medianfo_container_names.value[self.value]  # type: ignore[attr-defined, no-any-return]
 
 
 class CliState:
@@ -61,6 +87,7 @@ class CliState:
     dry_run: bool
     num_files: int
     encoder: str
+    container: VidContainer
 
 
 class UMask:
@@ -124,7 +151,6 @@ class StreamType(Enum):
 
 # Extensions of convertable files
 VIDEO_FILE_EXTS = set([".avi", ".mpg", ".mkv", ".m2ts", ".webm", ".m4v", ".mp4"])
-MPEG4_EXTS = set([".m4v", ".mp4"])
 # OLD OLD Extensions, questionable quality
 QUESTIONABLE_EXTS = set([".avi", ".mpg"])
 
@@ -1029,8 +1055,9 @@ def get_converted_name(path: p.Path) -> p.Path:
     """
     Give the name used for the new file in the conversion of :code:`path`
     """
-    if path.suffix not in MPEG4_EXTS:
-        return path.with_suffix(".mp4")
+    output_ext = CLI_STATE.container.output_ext()
+    if path.suffix not in CLI_STATE.container.valid_exts():
+        return path.with_suffix(output_ext)
     else:
         return path.with_suffix(f".{COLLISION_SUFFIX}{path.suffix}")
 
@@ -1044,9 +1071,21 @@ def is_skip_codec(path: p.PosixPath) -> bool:
     return any(codec in SKIP_CODECS for codec in codecs)
 
 
-def is_mp4_x265(path: p.PosixPath) -> bool:
+def is_video_container(path: p.Path) -> bool:
+    gen_json = mediainfo(path, typ=StreamType.General)[0]
+    container = None
+    try:
+        container = gen_json[StreamProperty.Format]
+    except KeyError:
+        return False
+    if container == "":
+        return False
+    return True
+
+
+def is_already_converted(path: p.Path) -> bool:
     """
-    Whether the given file is already HEVC in an MPEG-4 container.
+    Whether the given file is already the chosen codec in the chosen container.
     """
     gen_json = mediainfo(path, typ=StreamType.General)[0]
     container = None
@@ -1054,7 +1093,7 @@ def is_mp4_x265(path: p.PosixPath) -> bool:
         container = gen_json[StreamProperty.Format]
     except KeyError:
         raise (ValueError(f"File {path} doesn't look like a video file"))
-    if container != "MPEG-4":
+    if container != CLI_STATE.container.json_name():
         return False
     vid_jsons = mediainfo(path, typ=StreamType.Video)
     codecs = [obj[StreamProperty.Format] for obj in vid_jsons]
@@ -1385,7 +1424,9 @@ def process_vidlist(
         if num_processed >= limit:
             return total_size_saved
 
-        if is_mp4_x265(cur_path):
+        if not is_video_container(cur_path):
+            continue
+        if is_already_converted(cur_path):
             continue
         if just_list:
             print(os.path.getsize(cur_path), cur_path)
@@ -1488,11 +1529,14 @@ def process_vidlist(
                 num_processed += 1
                 continue
 
-            if convert_and_replace and cur_path.suffix == ".mp4":
+            if (
+                convert_and_replace
+                and cur_path.suffix in CLI_STATE.container.valid_exts()
+            ):
                 os.replace(new_path, cur_path)
             elif convert_and_replace:
                 os.remove(cur_path)
-            elif cur_path.suffix == ".mp4":
+            elif cur_path.suffix in CLI_STATE.container.valid_exts():
                 print_to_width(
                     f"os.replace({new_path}, {cur_path})",
                     subs_gap=2 * GAP,
@@ -1656,6 +1700,14 @@ if __name__ == "__main__":
         action="store",
         type=int,
         help="Only convert the `n' largest files",
+    )
+    parser.add_argument(
+        "-c",
+        "--container",
+        choices=[VidContainer.Matroska, VidContainer.MPEG_4],
+        type=VidContainer,
+        default=VidContainer.MPEG_4,
+        help="The container to use for the output file",
     )
     parser.add_argument(
         "-e",
