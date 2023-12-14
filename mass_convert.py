@@ -768,8 +768,8 @@ def get_pairs(
       JSON output of :func:`mediainfo` for the given type.
     :rtype: list[tuple[dict[StreamProperty, str], dict[StreamProperty, str]]]
     """
-    f1 = mediainfo(fname1, typ)
-    f2 = mediainfo(fname2, typ)
+    f1 = mediainfo(fname1, typ=typ)
+    f2 = mediainfo(fname2, typ=typ)
     results = []
     for ix in range(len(f1)):
         try:
@@ -852,7 +852,7 @@ def verify_conversion_tests(
     tests = list(StreamProperty)
     if any(
         json[StreamProperty.Format] == "Opus"
-        for json in mediainfo(fname2, StreamType.Audio)
+        for json in mediainfo(fname2, typ=StreamType.Audio)
     ):
         tests = [
             prop
@@ -924,7 +924,7 @@ def is_skip_codec(path: p.PosixPath) -> bool:
     """
     Whether the given file should not be converted, on the basis of its :code:`Format`.
     """
-    vid_jsons = mediainfo(path, StreamType.Video)
+    vid_jsons = mediainfo(path, typ=StreamType.Video)
     codecs = [obj[StreamProperty.Format] for obj in vid_jsons]
     return any(codec in SKIP_CODECS for codec in codecs)
 
@@ -933,7 +933,7 @@ def is_mp4_x265(path: p.PosixPath) -> bool:
     """
     Whether the given file is already HEVC in an MPEG-4 container.
     """
-    gen_json = mediainfo(path, StreamType.General)[0]
+    gen_json = mediainfo(path, typ=StreamType.General)[0]
     container = None
     try:
         container = gen_json[StreamProperty.Format]
@@ -941,7 +941,7 @@ def is_mp4_x265(path: p.PosixPath) -> bool:
         raise (ValueError(f"File {path} doesn't look like a video file"))
     if container != "MPEG-4":
         return False
-    vid_jsons = mediainfo(path, StreamType.Video)
+    vid_jsons = mediainfo(path, typ=StreamType.Video)
     codecs = [obj[StreamProperty.Format] for obj in vid_jsons]
     codec_ids = [obj[StreamProperty.CodecID] for obj in vid_jsons]
     return all(codec == "HEVC" for codec in codecs) and all(
@@ -1078,7 +1078,9 @@ def generate_conversions(
         return stream_order if stream_order[:2] != "0-" else stream_order[2:]
 
     num_frames = 200
-    codec_ids = [typ_json[StreamProperty.CodecID] for typ_json in mediainfo(path, typ)]
+    codec_ids = [
+        typ_json[StreamProperty.CodecID] for typ_json in mediainfo(path, typ=typ)
+    ]
 
     if validate:
         try:
@@ -1092,16 +1094,16 @@ def generate_conversions(
         invalid_ixs = set()
         all_stream_ixs = set(
             int(clean_stream_order(sub_json[StreamProperty.StreamOrder]))
-            for sub_json in mediainfo(path, typ)
+            for sub_json in mediainfo(path, typ=typ)
         )
 
     # If 200 packets is too small, keep tryin'
     more_frames = False
-    while validate and len(all_stream_ixs) != len(mediainfo(path, typ)):
+    while validate and len(all_stream_ixs) != len(mediainfo(path, typ=typ)):
         num_frames *= 2
         if not more_frames:
             print_to_width(
-                f"Calculated stream indexes ({len(all_stream_ixs)}) for type '{typ}' do not match the mediainfo output({len(mediainfo(path, typ))})",
+                f"Calculated stream indexes ({len(all_stream_ixs)}) for type '{typ}' do not match the mediainfo output({len(mediainfo(path, typ=typ))})",
                 init_gap=2 * GAP,
                 subs_gap=2 * GAP,
             )
@@ -1122,7 +1124,7 @@ def generate_conversions(
     # True)
     all_stream_ixs_json = set(
         int(clean_stream_order(sub_json[StreamProperty.StreamOrder]))
-        for sub_json in mediainfo(path, typ)
+        for sub_json in mediainfo(path, typ=typ)
     )
     print_d("typ, validate:", typ, validate, verbosity_limit=3)
     print_d(
@@ -1181,6 +1183,7 @@ def pprint_ffmpeg(path: p.Path) -> str:
                 init_gap=2 * GAP,
                 subs_gap=2 * GAP,
                 delim=delim,
+                width=width - 5,
             ),
             2 * GAP + f"{lst[-1]}",
         )
@@ -1189,7 +1192,7 @@ def pprint_ffmpeg(path: p.Path) -> str:
 
 @cache
 def ffmpeg_cmd(path: p.Path) -> list[str]:
-    video_tracks = mediainfo(path, StreamType.Video)
+    video_tracks = mediainfo(path, typ=StreamType.Video)
     heights = set([track[StreamProperty.Height] for track in video_tracks])
     widths = set([track[StreamProperty.Width] for track in video_tracks])
 
@@ -1201,7 +1204,10 @@ def ffmpeg_cmd(path: p.Path) -> list[str]:
     subtitles_have_duration = True
     subtitle_conversions = []
     try:
-        [track[StreamProperty.Duration] for track in mediainfo(path, StreamType.Text)]
+        [
+            track[StreamProperty.Duration]
+            for track in mediainfo(path, typ=StreamType.Text)
+        ]
     except KeyError:
         subtitles_have_duration = False
     if subtitles_have_duration:
