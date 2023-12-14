@@ -129,15 +129,14 @@ MPEG4_EXTS = set([".m4v", ".mp4"])
 QUESTIONABLE_EXTS = set([".avi", ".mpg"])
 
 COLLISION_SUFFIX = "converted"
-PRINT_WIDTH = 68
+PRINT_WIDTH = shutil.get_terminal_size().columns
 CLI_STATE = CliState()
 DEBUG_STREAM = sys.stdout
 D_STRING = "--> "
 
 # Preserve AV1/VP9 encoded videos for now
 SKIP_CODECS = ["AV1", "VP9"]
-# Leave video codecs as None, this will get replaced by the argument
-# parser
+# Leave video codecs as None to be replaced by the argument parser
 CODEC_ID_MAP = {
     # Video
     # "V_AV1": AV1_ENCODER,
@@ -492,7 +491,7 @@ def cache(func: Callable[PS, R]) -> Callable[PS, R]:
             pass
         dict_args = tuple(f"{key}={kwargs[key]}" for key in kwargs)
         print_d(
-            f"{D_STRING}Caching result for {func_name}{args + dict_args}",
+            f"Caching result for {func_name}{args + dict_args}",
         )
         result = func(*args, **kwargs)
         try:
@@ -572,7 +571,7 @@ def mediainfo(
     :rtype: list[dict[StreamProperty, str]]
     """
 
-    if type(path) != p.PosixPath:
+    if not isinstance(path, p.Path):
         raise TypeError("mediainfo was passed an object that isn't a pathlib.Path")
 
     proc_out = s.run(["mediainfo", "--Output=JSON", path], capture_output=True)
@@ -748,8 +747,8 @@ def print_d(
 
     if verbosity_limit > CLI_STATE.verbosity:
         return
-    d_str = f"{GAP}  ---> "
-    blank = " " * (len(d_str) - 3) + "-> "
+    d_str = f"{GAP}  {D_STRING}"
+    blank = " " * (len(d_str) - 2) + f"{D_STRING[2:]}"
     result = write_to_width(
         " ".join(map(str, args)), init_gap=d_str, subs_gap=blank, delim="\n"
     )
@@ -781,7 +780,7 @@ def print_d(
         new_result.append(line + return_code)
 
     outstream.write("\n".join(new_result))
-    outstream.write("\n")
+    outstream.write("\n\n")
 
 
 def shorten_string(string: str, length: int) -> str:
@@ -1114,7 +1113,7 @@ def validate_streams_to_convert(
     if ffprobe_stderr:
         err = write_to_width(
             "ffprobe (2nd) failure:" + "\n" + ffprobe_stderr,
-            init_gap=GAP,
+            init_gap=2 * GAP,
             subs_gap=2 * GAP,
         )
         raise RuntimeError(err)
@@ -1281,11 +1280,12 @@ def pprint_ffmpeg(path: p.Path) -> str:
     Pretty print the ffmpeg command that will be used to convert the
     given file.
     """
+    if width == 0:
+        width = shutil.get_terminal_size().columns
     lst = ffmpeg_cmd(path).copy()
     ix = lst.index(str(path))
     lst[ix] = '"' + lst[ix] + '"'
     lst[-1] = '"' + lst[-1] + '"'
-    width = shutil.get_terminal_size().columns
     delim = " \\ \n"
 
     return delim.join(
@@ -1354,7 +1354,7 @@ def ffmpeg_cmd(path: p.Path, skip_subs: bool = False) -> list[str]:
 
 
 def process_vidlist(
-    vidlist: [p.PosixPath],
+    vidlist: list[p.Path],
     exact: bool = False,
     mayb_limit: Optional[int] = None,
     convert_and_replace: bool = True,
@@ -1479,9 +1479,11 @@ def process_vidlist(
                 num_processed += 1
                 continue
             if cur_path.suffix in QUESTIONABLE_EXTS:
-                print_to_width(color_text("Weird Extension", TermColor.Magenta))
                 print_to_width(
-                    f"Keeping {color_text(str(new_path), TermColor.Magenta)}"
+                    color_text(f"Old extension: '{cur_path.suffix}", TermColor.Magenta)
+                )
+                print_to_width(
+                    f"Keeping {color_text(str(cur_path), TermColor.Magenta)}"
                 )
                 num_processed += 1
                 continue
@@ -1676,7 +1678,7 @@ This is automatically set to true if the number of files is smaller than 10""",
         help="If set, don't remove the original file after encoding.",
     )
     parser.add_argument(
-        "-k",
+        "-f",
         "--keep-failures",
         action="store_true",
         help="If set, don't remove the mp4 files from a failed ffmpeg conversion",
@@ -1788,5 +1790,5 @@ def test_print_d_mostly_plain() -> None:
         )
         + " bud"
         + " in this cruel world of ours, sometimes it is necessary",
-        color=None,
+        color=TermColor.White,
     )
