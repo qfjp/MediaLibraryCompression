@@ -27,7 +27,6 @@ from typing import (
 )
 
 import ffpb  # type: ignore[import]
-import humanize
 from overrides import overrides
 
 os.nice(10)
@@ -215,6 +214,16 @@ def fuzziest_float(x: str, y: str) -> bool:
 
 def matches(match_str: str) -> Callable[[str, str], bool]:
     return lambda _, y: y == match_str
+
+
+INT_TOLERANCE = 6
+def convert_bytes(bytes: float) -> str:
+    exp = 1
+    while bytes % (1024**exp) < bytes:
+        exp += 1
+    exp -= 1
+    suffixes = ["", "K", "M", "G", "T", "P", "E", "Z", "Y"]
+    return "{:.2f} {}iB".format(bytes / (1024**exp), suffixes[exp])
 
 
 INT_TOLERANCE = 6
@@ -1333,7 +1342,7 @@ def process_vidlist(
                 f"Compression: {compression:.3f}%", init_gap=(2 * GAP + "  ")
             )
             print_to_width(
-                f"Savings: {humanize.naturalsize(diff_size)} = {humanize.naturalsize(old_size)} - {humanize.naturalsize(new_size)}",
+                f"Savings: {convert_bytes(diff_size)} = {convert_bytes(old_size)} - {convert_bytes(new_size)}",
                 init_gap=2 * GAP + "  ",
             )
             if diff_size < 0:
@@ -1470,7 +1479,7 @@ def main() -> None:
 
     print(
         "Total Savings:",
-        str(humanize.naturalsize(total_size_saved)),
+        str(convert_bytes(total_size_saved)),
         "(" + str(total_size_saved) + ")",
     )
     print(
