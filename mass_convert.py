@@ -239,6 +239,10 @@ def fuzziest_float(x: str, y: str) -> bool:
     return math.fabs(safer_float(x) - safer_float(y)) <= FUZZIEST_TOLERANCE
 
 
+X = TypeVar("X")
+Y = TypeVar("Y")
+
+
 def const_true(x: X, y: Y) -> bool:
     return True
 
