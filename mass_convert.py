@@ -1,6 +1,4 @@
 #!/bin/python
-import _io  # type: ignore
-
 import argparse as ap
 import datetime
 import grp
@@ -542,6 +540,7 @@ def print_to_width(
     init_gap: str = GAP,
     subs_gap: str = GAP,
     delim: str = "\n",
+    outstream: TextIO = sys.stdout,
 ) -> None:
     """
     Print a string, wrapping to a certain width, with the
@@ -553,7 +552,7 @@ def print_to_width(
     :param str subs_gap: The indentation of all subsequent lines.
     :param str delim: The delimiter to place between lines. By default,
       this is :code:`"\\\\n"`
-    :param _io.TextIOWrapper outstream: The file stream to write to
+    :param TextIO outstream: The file stream to write to
       (stdout by default).
     :returns: None
     """
@@ -591,10 +590,9 @@ def print_d(
     :param bool bold: If true, bold the text.
     :param outstream: The file stream to write to
       (stdout by default).
-    :type outstream: :class:`_io.TextIOWrapper`
+    :type outstream: :class:`TextIO`
     :returns: None
     """
-    outstream = sys.stdout
     if verbosity_limit > CLI_STATE.verbosity:
         return
     d_str = f"{GAP}  ---> "
