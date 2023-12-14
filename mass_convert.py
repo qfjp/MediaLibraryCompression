@@ -485,12 +485,12 @@ def cache(func: Callable[PS, R]) -> Callable[PS, R]:
     def inner(*args: PS.args, **kwargs: PS.kwargs) -> R:
         func_name = func.__name__
         arg_tuple: PS.args = args
-        kwarg_pairs = tuple([(key, kwargs[key]) for key in kwargs])
+        kwarg_pairs = tuple((key, kwargs[key]) for key in kwargs)
         try:
             return GEN_CACHE[func_name][arg_tuple + kwarg_pairs]
         except KeyError:
             pass
-        dict_args = tuple([f"{key}{kwargs[key]}" for key in kwargs])
+        dict_args = tuple(f"{key}={kwargs[key]}" for key in kwargs)
         print_d(
             f"{D_STRING}Caching result for {func_name}{args + dict_args}",
         )
@@ -1129,9 +1129,7 @@ def validate_streams_to_convert(
     ]
     all_stream_ixs = set(int(packet_lst[1]) for packet_lst in ffprobe_stdout)
     invalid_ixs = set(
-        int(packet_lst[1])
-        for packet_lst in ffprobe_stdout
-        if packet_lst[2] == "N/A"
+        int(packet_lst[1]) for packet_lst in ffprobe_stdout if packet_lst[2] == "N/A"
     )
     return (all_stream_ixs, invalid_ixs)
 
