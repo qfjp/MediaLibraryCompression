@@ -686,7 +686,7 @@ def write_to_width(
 
 
 def print_to_width(
-    string: str,
+    printable_object: object,
     init_gap: str = GAP,
     subs_gap: str = GAP,
     delim: str = "\n",
@@ -706,6 +706,7 @@ def print_to_width(
       (stdout by default).
     :returns: None
     """
+    string = str(printable_object)
     outstream = sys.stdout
     outstream.write(
         write_to_width(
