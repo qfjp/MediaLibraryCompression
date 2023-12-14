@@ -172,6 +172,24 @@ CODEC_ID_MAP = {
 }
 
 
+def true_if_left_empty(func: Callable[[str, str], bool]) -> Callable[[str, str], bool]:
+    """
+    Wraps a function taking two arguments, and returns True if the left
+    argument is None.
+
+    This is used with the metadata comparison functions. If the
+    original does not have a value (the left argument) then the test
+    should automatically pass.
+    """
+
+    def inner(str1: str, str2: str) -> bool:
+        if str1 == "":
+            return True
+        return func(str1, str2)
+
+    return inner
+
+
 def safer_float(string: str) -> float:
     try:
         return float(string)
@@ -186,32 +204,43 @@ def safer_int(string: str) -> int:
         return 0
 
 
+@true_if_left_empty
 def exact_match(x: str, y: str) -> bool:
     return x == y
 
 
+@true_if_left_empty
 def exact_int(x: str, y: str) -> bool:
     return safer_int(x) == safer_int(y)
 
 
+@true_if_left_empty
 def set_match(x: str, y: str) -> bool:
     return string_val_to_set(x) == string_val_to_set(y)
 
 
+@true_if_left_empty
 def almost_int(x: str, y: str) -> bool:
     return math.fabs(safer_int(x) - safer_int(y)) <= 1
 
 
+@true_if_left_empty
 def fuzzy_int(x: str, y: str) -> bool:
     return math.fabs(safer_int(x) - safer_int(y)) <= INT_TOLERANCE
 
 
+@true_if_left_empty
 def fuzzy_float(x: str, y: str) -> bool:
     return math.fabs(safer_float(x) - safer_float(y)) <= FLOAT_TOLERANCE
 
 
+@true_if_left_empty
 def fuzziest_float(x: str, y: str) -> bool:
     return math.fabs(safer_float(x) - safer_float(y)) <= FUZZIEST_TOLERANCE
+
+
+def const_true(x: X, y: Y) -> bool:
+    return True
 
 
 def matches(match_str: str) -> Callable[[str, str], bool]:
@@ -304,17 +333,17 @@ class StreamProperty(Enum):
     # function is const(True)
     Format = (
         set([StreamType.General, StreamType.Video, StreamType.Audio, StreamType.Text]),
-        lambda x, y: True,
+        const_true,
         auto(),
     )
     CodecID = (
         set([StreamType.Video, StreamType.Audio, StreamType.Text]),
-        lambda x, y: True,
+        const_true,
         auto(),
     )
     StreamOrder = (
         set([StreamType.Video, StreamType.Audio, StreamType.Text]),
-        lambda x, y: True,
+        const_true,
         auto(),
     )
 
