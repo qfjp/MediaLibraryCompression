@@ -35,6 +35,7 @@ from overrides import overrides
 
 os.nice(10)
 
+VERIFIED_TRANSCODES = []
 
 @unique
 class VidContainer(Enum):
@@ -95,6 +96,28 @@ class CliState:
     num_files: int
     encoder: str
     container: VidContainer
+
+
+@unique
+class Tern(Enum):
+    TFalse = False
+    TTrue = True
+    TOther = auto()
+
+    def __cls__(cls, value: object) -> "Tern":
+        if value == Tern.TOther:
+            return Tern.TOther
+        return Tern.from_bool(bool(value))
+
+    def __bool__(self) -> bool:
+        return bool(self.value)
+
+    @staticmethod
+    def from_bool(b: bool) -> "Tern":
+        if b:
+            return Tern.TTrue
+        else:
+            return Tern.TFalse
 
 
 class UMask:
@@ -234,6 +257,32 @@ def true_if_left_empty(func: Callable[[str, str], bool]) -> Callable[[str, str],
     return inner
 
 
+def truthy_if_right_empty(
+    func: Callable[[str, str], bool]
+) -> Callable[[str, str], Tern]:
+    def inner(str1: str, str2: str) -> Tern:
+        if str2 == "":
+            return Tern.TOther
+        return Tern.from_bool(func(str1, str2))
+
+    return inner
+
+
+def never_false(func: Callable[[str, str], bool]) -> Callable[[str, str], Tern]:
+    """
+    Convert a boolean function to a never-false ternary function.
+    :return: λ(s1, s2) = 1 + func(s1, s2)
+    """
+
+    def inner(str1: str, str2: str) -> Tern:
+        result = func(str1, str2)
+        if not result:
+            return Tern.TOther
+        return Tern.TTrue
+
+    return inner
+
+
 def safer_float(string: str) -> float:
     try:
         return float(string)
@@ -281,6 +330,20 @@ def fuzzy_float(x: str, y: str) -> bool:
 @true_if_left_empty
 def fuzziest_float(x: str, y: str) -> bool:
     return math.fabs(safer_float(x) - safer_float(y)) <= FUZZIEST_TOLERANCE
+
+
+@true_if_left_empty
+def new_is_more(x: str, y: str) -> bool:
+    return safer_int(x) <= safer_int(y)
+
+
+def new_is_less(x: str, y: str) -> bool:
+    return int(x) >= int(y)
+
+
+@true_if_left_empty
+def new_is_more_fuzziest(x: str, y: str) -> bool:
+    return (safer_float(x) - FUZZIEST_TOLERANCE) <= safer_float(y)
 
 
 def scantype_compare(x: str, y: str) -> bool:
@@ -457,13 +520,6 @@ class StreamProperty(Enum):
             return NotImplemented
         return self.value[1]
 
-    ## These tests tend to fail:
-    # FrameCount = (set([StreamType.General, StreamType.Video]), almost_int)
-    # FrameRate_Den = (set([StreamType.Video, StreamType.Audio]), exact_int)
-    # FrameRate_Mode = (set([StreamType.Video]), exact_match)
-    # FrameRate_Num = (set([StreamType.Video, StreamType.Audio]), exact_int)
-    # BitRate_Maximum = (set([StreamType.Audio]), exact_int)
-
     # These are solely for categorization, so the comparison
     # function is const(True)
     Format = (
@@ -484,12 +540,12 @@ class StreamProperty(Enum):
 
     Duration = (
         set([StreamType.General, StreamType.Video, StreamType.Audio]),
-        fuzziest_float,
+        new_is_more_fuzziest,
         auto(),
     )
     FrameRate = (
         set([StreamType.General, StreamType.Video, StreamType.Audio]),
-        fuzzy_float,
+        truthy_if_right_empty(fuzzy_float),
         auto(),
     )
     AudioCount = (set([StreamType.General]), exact_int, auto())
@@ -508,10 +564,33 @@ class StreamProperty(Enum):
     Width = (set([StreamType.Video]), exact_int, auto())
     ChannelLayout = (set([StreamType.Audio]), set_match, auto())
     ChannelPositions = (set([StreamType.Audio]), set_match, auto())
-    Channels = (set([StreamType.Audio]), exact_int, auto())
-    Compression_Mode = (set([StreamType.Audio]), exact_match, auto())
+    Channels = (set([StreamType.Audio]), truthy_if_right_empty(exact_int), auto())
+    Compression_Mode = (
+        set([StreamType.Audio]),
+        truthy_if_right_empty(exact_match),
+        auto(),
+    )
     SamplingRate = (set([StreamType.Audio]), exact_int, auto())
     ServiceKind = (set([StreamType.Audio]), exact_match, auto())
+
+    ## These tests tend to fail:
+    FrameCount = (
+        set([StreamType.General, StreamType.Video]),
+        never_false(almost_int),
+        auto(),
+    )
+    FrameRate_Den = (
+        set([StreamType.Video, StreamType.Audio]),
+        never_false(exact_int),
+        auto(),
+    )
+    FrameRate_Mode = (set([StreamType.Video]), never_false(exact_match), auto())
+    FrameRate_Num = (
+        set([StreamType.Video, StreamType.Audio]),
+        never_false(exact_int),
+        auto(),
+    )
+    BitRate_Maximum = (set([StreamType.Audio]), never_false(exact_int), auto())
 
 
 class TermColor(Enum):
@@ -1024,8 +1103,8 @@ def get_pairs(  # type: ignore[misc]
 def compare_stream_property(
     pairs: list[tuple[dict[StreamProperty, str], dict[StreamProperty, str]]],
     key: StreamProperty,
-    compare_func: Callable[[str, str], bool] = exact_match,
-) -> tuple[bool, list[StreamPropSingleCompareResult]]:
+    compare_func: Callable[[str, str], bool | Tern],
+) -> tuple[Tern | bool, list[StreamPropSingleCompareResult]]:
     """
     Compare the values of :func:`mediainfo`'s output.
 
@@ -1070,21 +1149,27 @@ def compare_stream_property(
         return (False, [])
     except TypeError:
         return (False, [])
-    bad_results = [tup[1] for tup in results if not tup[0]]
-    return (len(bad_results) == 0, bad_results)
+    bad_results = [tup[1] for tup in results if Tern(tup[0]) != Tern.TTrue]
+    iffy_results = [tup[1] for tup in results if tup[0] == Tern.TOther]
+    return (
+        Tern.TOther if len(iffy_results) != 0 else len(bad_results) == 0,
+        bad_results,
+    )
 
 
 @cache_choice(GEN_CACHE)
 def verify_conversion_tests(  # type: ignore[misc]
     fname1: p.Path, fname2: p.Path
-) -> list[tuple[bool, StreamType, StreamProperty, list[StreamPropSingleCompareResult]]]:
+) -> list[
+    tuple[bool | Tern, StreamType, StreamProperty, list[StreamPropSingleCompareResult]]
+]:
     """
     Verify the conversion of a media file.
 
     :param p.Path fname1: The original media file
     :param p.Path fname2: The converted media file
     :returns: A list of failed tests and their results as a tuple where the entries are as follows:
-        (result (always false), type of stream, property to compare, stream indices, mismatched output)
+        (result (true if any of the comparisons are not bool(x) == True), type of stream, property to compare, stream indices, mismatched output)
     :rtype: list[tuple[bool, StreamType, StreamProperty, list[StreamPropSingleCompareResult]]]
     """
     if not (fname1.exists() and fname2.exists()):
@@ -1126,14 +1211,18 @@ def verify_conversion_tests(  # type: ignore[misc]
     return orig_results
 
 
-def verify_conversion(fname1: p.Path, fname2: p.Path) -> bool:
+def verify_conversion(fname1: p.Path, fname2: p.Path) -> bool | Tern:
     """
     Verify that the two files match, up to the tests in :code:`STREAM_PROP_TESTS`.
 
     :returns: True if :code:`fname1` ~= :code:`fname2`
     """
-    results = verify_conversion_tests(fname1, fname2)
-    return all(tup[0] for tup in results)
+    results = [tup[0] for tup in verify_conversion_tests(fname1, fname2)]
+    if False in results:
+        return False
+    if Tern.TOther in results:
+        return Tern.TOther
+    return True
 
 
 def failed_tests(fname1: p.Path, fname2: p.Path) -> str:
@@ -1146,22 +1235,30 @@ def failed_tests(fname1: p.Path, fname2: p.Path) -> str:
         tuple[StreamType, StreamProperty, list[StreamPropSingleCompareResult]]
     ] = [tup[1:] for tup in results if not tup[0]]
     pretty_results = "\n".join(
-        tup[0].name
+        tup[1].name
         + "."
-        + tup[1].name
-        + str([comparison.type_order for comparison in tup[2]])
+        + tup[2].name
+        + str([comparison.type_order for comparison in tup[3]])
         + ": "
-        + color_text(
-            str(
-                [
-                    (comparison.f1_json_val, comparison.f2_json_val)
-                    for comparison in tup[2]
-                ]
-            ),
-            TermColor.Red,
+        + "["
+        + ", ".join(
+            color_text(
+                str((comparison.f1_json_val, comparison.f2_json_val)),
+                (
+                    TermColor.Red
+                    if not tup[2].get_comparison_func()(
+                        comparison.f1_json_val, comparison.f2_json_val
+                    )
+                    else TermColor.Blue
+                ),
+            )
+            for comparison in tup[3]
         )
-        for tup in result_tups
+        + "]"
+        for tup in results
+        if tup[0] == Tern.TOther or not tup[0]
     )
+
     return pretty_results
 
 
@@ -1604,13 +1701,17 @@ def process_vidlist(
             verif_mark = CHECK if verified else CROSS
             verified_str = write_to_width(f"{verif_color(verif_mark)} Verified")
             print(verified_str)
-            if not verified:
+            if (not verified and isinstance(verified, bool)) or verified == Tern.TOther:
                 print_to_width(
                     failed_tests(cur_path, new_path),
                     init_gap=GAP + "  ",
                     subs_gap=2 * GAP,
                     delim=",\n",
                 )
+
+            if (verified and isinstance(verified, bool)) or verified == Tern.TOther:
+                VERIFIED_TRANSCODES.append(cur_path)
+
             print_to_width()
             continue
 
@@ -1639,7 +1740,8 @@ def process_vidlist(
         print_to_width(f"Conversion Runtime: {write_timedelta(time_taken)}")
         set_fprops(new_path)
 
-        if verify_conversion(cur_path, new_path):
+        verified = verify_conversion(cur_path, new_path)
+        if (verified and isinstance(verified, bool)) or verified == Tern.TOther:
             old_size = os.path.getsize(cur_path)
             new_size = os.path.getsize(new_path)
             diff_size = old_size - new_size
@@ -1969,6 +2071,11 @@ This is automatically set to true if the number of files is smaller than 10""",
         CLI_STATE.gid = grp.getgrnam(CLI_STATE.group).gr_gid
 
     main()
+    if VERIFIED_TRANSCODES:
+        print_to_width("~~~~~~~~~~~~~~~")
+        print_to_width("Okay to delete:")
+        for name in VERIFIED_TRANSCODES:
+            print_to_width(name)
 
 
 def test_print_d_colors() -> None:
