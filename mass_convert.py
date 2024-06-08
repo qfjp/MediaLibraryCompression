@@ -29,6 +29,8 @@ from typing import (
 )
 
 import ffpb  # type: ignore[import-untyped]
+import requests
+from secrets import phone_number
 from overrides import overrides
 
 os.nice(10)
@@ -1506,6 +1508,18 @@ def ffmpeg_cmd(path: p.Path, skip_subs: bool = False) -> list[str]:  # type: ign
     return cmd
 
 
+def signal_notify(
+    message: str, sender: str = phone_number, recipients: list[str] = [phone_number]
+) -> None:
+    post_data = {
+        "message": message,
+        "number": sender,
+        "recipients": recipients,
+    }
+    post_headers = {"Content-Type": "application/json"}
+    requests.post("http://localhost:9922/v2/send", json=post_data, headers=post_headers)
+
+
 def process_vidlist(
     vidlist: list[p.Path],
     exact: bool = False,
@@ -1549,10 +1563,18 @@ def process_vidlist(
         new_path = get_converted_name(cur_path)
         format_string = "({:" + f"{limit_digits}d" + "}/{:d}) Processing {}"
 
+        progress_string = format_string.format(num_processed + 1, limit, cur_path.name)
+
         print_to_width(
-            format_string.format(num_processed + 1, limit, cur_path.name),
+            progress_string,
             init_gap="",
             subs_gap=GAP,
+        )
+        old_size = os.path.getsize(cur_path)
+        size_prefix = "Size: "
+        print_to_width(
+            "{}{}".format(size_prefix, convert_bytes(old_size)),
+            subs_gap=GAP + "".join(" " for _ in size_prefix),
         )
         dir_prefix = "Dir: "
         print_to_width(
@@ -1591,6 +1613,9 @@ def process_vidlist(
                 )
             print_to_width()
             continue
+
+        signal_notify("{} ({})".format(progress_string, convert_bytes(old_size)))
+
         ffmpeg_proc_str = ffmpeg_cmd(cur_path)
 
         print(pprint_ffmpeg(cur_path))
@@ -1620,6 +1645,12 @@ def process_vidlist(
             diff_size = old_size - new_size
             total_size_saved += diff_size
             compression = find_compression_ratio(cur_path, new_path)
+
+            signal_notify(
+                "✅ Verified {}\n{new_size} • {perc:.2f}%".format(
+                    new_path.name, new_size=convert_bytes(new_size), perc=compression
+                )
+            )
             print_to_width(f"{color_text(CHECK, TermColor.Green)} Metadata matches")
             print_to_width(
                 f"Compression: {compression:.3f}%", init_gap=(2 * GAP + "  ")
@@ -1661,9 +1692,20 @@ def process_vidlist(
                     f"os.remove({cur_path})", subs_gap=2 * GAP, delim=" \\\n"
                 )
         else:
+            failed = failed_tests(cur_path, new_path)
+            failed_lst = failed.splitlines()
+            num_failed = len(failed_lst)
+            webhook_message = (
+                " • ".join(failed_lst)
+                if num_failed < 4
+                else " • ".join(failed_lst[:3]) + "..."
+            )
+            webhook_message = uncolor_text(webhook_message)
+            signal_notify("❌ Failed {}\n{}".format(new_path.name, webhook_message))
+
             print_to_width(f"{color_text(CROSS, TermColor.Red)} Metadata mismatch")
             print_to_width(
-                failed_tests(cur_path, new_path),
+                failed,
                 init_gap=GAP + "  ",
                 subs_gap=2 * GAP,
                 delim=",\n",
