@@ -1015,10 +1015,10 @@ def print_d(
     next_escape = escape_code
     inner_color = False
     for line in result.splitlines():
-        line = re.sub("\[0m(?!|$)", f"[0m{escape_code}", line)
-        line = re.sub(d_str, f"{d_str}{next_escape}", line)
-        line = re.sub(blank, f"{blank}{next_escape}", line)
-        escapes = re.findall("\[[0-9];[0-9]{2}m", line)
+        line = re.sub("\\[0m(?!|$)", "[0m" + escape_code, line)
+        line = re.sub(d_str, d_str + next_escape, line)
+        line = re.sub(blank, blank + next_escape, line)
+        escapes = re.findall("\\[[0-9];[0-9]{2}m", line)
         last_escape_in_line = ""
         inner_color = False
         if escapes:
