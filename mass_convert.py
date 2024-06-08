@@ -171,34 +171,46 @@ SKIP_CODECS = ["AV1", "VP9"]
 CODEC_ID_MAP = {
     # Video
     # "V_AV1": AV1_ENCODER,
+    "V_MPEG2": None,
     "V_MPEG4/ISO/AVC": None,
     "V_MPEGH/ISO/HEVC": None,
     "avc1": None,
+    "V_MS/VFW/FOURCC / WVC1": None,
     "XVID": None,
+    "DX50": None,  # DivX
     "27": None,  # Bluray for "x264"
+    "mp4v-20": None,
     # Audio
     "A_EAC3": "copy",
+    "ec-3": "copy",
     "A_DTS": "copy",
     "A_AC3": "copy",
     "ac-3": "copy",
     "2000": "copy",  # Found for AC-3 in an avi/xvid file
     "131": "copy",  # Bluray for AC-3
     "129": "copy",  # Bluray for AC-3
+    "55": "copy",  # AVI for MPEG Audio
     "A_TRUEHD": "copy",
     "AAC": "copy",
     "A_AAC-2": "copy",
     "mp4a-40-2": "copy",
+    "A_MPEG/L2": "copy",
     "A_MPEG/L3": "copy",
     "A_OPUS": "copy",
+    "A_VORBIS": "copy",
     "A_FLAC": "copy",
+    "A_PCM/INT/LIT": "copy",
     # Subtitle
     "S_DVBSUB": "dvdsub",
     "S_HDMV/PGS": "dvdsub",
     "144": "dvdsub",  # Bluray for PGS
     "S_VOBSUB": "dvdsub",
+    "mp4s-E0": "dvdsub",
     "S_TEXT/ASS": "mov_text",
     "S_TEXT/UTF8": "mov_text",
     "tx3g": "mov_text",
+    # Analog Subtitle
+    "c608": "copy",
 }
 
 
