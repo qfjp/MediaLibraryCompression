@@ -1565,10 +1565,10 @@ def process_vidlist(
             subs_gap=GAP + "".join(" " for _ in new_file_prefix),
             delim="\\ \n",
         )
-        print()
+        print_to_width()
         if is_skip_codec(cur_path):
             print_to_width(color_text("AV1/VP9 file!", TermColor.Green))
-            print()
+            print_to_width()
             continue
 
         if os.path.exists(new_path):
@@ -1589,12 +1589,12 @@ def process_vidlist(
                     subs_gap=2 * GAP,
                     delim=",\n",
                 )
-            print()
+            print_to_width()
             continue
         ffmpeg_proc_str = ffmpeg_cmd(cur_path)
 
         print(pprint_ffmpeg(cur_path))
-        print()
+        print_to_width()
 
         if dry_run:
             num_processed += 1
@@ -1670,15 +1670,15 @@ def process_vidlist(
             )
             if not keep_failures:
                 os.remove(new_path)
-                print()
+                print_to_width()
             else:
                 print_to_width(f"Keeping {color_text(str(new_path), TermColor.Red)}")
-                print()
+                print_to_width()
                 num_processed += 1
             continue
 
         num_processed += 1
-        print()
+        print_to_width()
     # Because the size of the vidlist is accurate
     return total_size_saved
 
