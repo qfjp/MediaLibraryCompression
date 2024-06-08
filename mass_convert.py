@@ -838,7 +838,7 @@ def mediainfo(  # type: ignore[misc]
 
 
 def write_to_width(
-    string: str,
+    *printable_objects: object,
     width: int = PRINT_WIDTH,
     init_gap: str = GAP,
     subs_gap: str = GAP,
@@ -858,6 +858,7 @@ def write_to_width(
       parameters on the left and wrapped at :code:`width` on the right
     :rtype: str
     """
+    string = " ".join(str(x) for x in printable_objects)
     wrapper = TextWrapper(
         initial_indent=init_gap,
         break_long_words=False,
@@ -870,7 +871,7 @@ def write_to_width(
 
 
 def print_to_width(
-    printable_object: object,
+    *printable_objects: object,
     init_gap: str = GAP,
     subs_gap: str = GAP,
     delim: str = "\n",
@@ -890,8 +891,7 @@ def print_to_width(
       (stdout by default).
     :returns: None
     """
-    string = str(printable_object)
-    outstream = sys.stdout
+    string = " ".join(str(x) for x in printable_objects)
     outstream.write(
         write_to_width(
             string,
@@ -901,6 +901,7 @@ def print_to_width(
         )
     )
     outstream.write("\n")
+    outstream.flush()
 
 
 def print_d(
@@ -1001,6 +1002,7 @@ def print_d(
 
     outstream.write("\n".join(new_result))
     outstream.write("\n\n")
+    outstream.flush()
 
 
 def shorten_string(string: str, length: int) -> str:
