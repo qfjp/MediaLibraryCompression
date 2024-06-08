@@ -385,7 +385,9 @@ class StreamPropSingleCompareResult:
         self.f2_json_val = f2_json_val
 
     def __str__(self) -> str:
-        return f"StreamPropSingleCompareResult({self.type_order}, {self.f1_json_val}, {self.f2_json_val})"
+        return "StreamPropSingleCompareResult({}, {}, {})".format(
+            self.type_order, self.f1_json_val, self.f2_json_val
+        )
 
     def __repr__(self) -> str:
         return self.__str__()
@@ -561,17 +563,20 @@ def cache_choice(
 
             # printable stuff
             dict_string = tuple(
-                f"{key}='{kwargs[key]}'"
-                if isinstance(kwargs[key], str | p.Path)
-                else f"{key}={kwargs[key]}"
+                (
+                    "{}='{}'".format(key, kwargs[key])
+                    if isinstance(kwargs[key], str | p.Path)
+                    else "{}={}".format(key, kwargs[key])
+                )
                 for key in kwargs
             )
             arg_string = tuple(
-                f"'{s}'" if isinstance(s, p.Path | str) else str(s) for s in args
+                "'{}'".format(s) if isinstance(s, p.Path | str) else str(s)
+                for s in args
             )
             arg_dict_string = ", ".join(arg_string + dict_string)
             print_d(
-                f"Caching result for {func_name}({arg_dict_string})",
+                "Caching result for {}({})".format(func_name, arg_dict_string),
             )
 
             # real stuff
@@ -619,9 +624,9 @@ def cache(func: Callable[PS, R]) -> Callable[PS, R]:
             return GEN_CACHE[func_name][arg_tuple + kwarg_pairs]  # type: ignore[no-any-return]
         except KeyError:
             pass
-        dict_args = tuple(f"{key}={kwargs[key]}" for key in kwargs)
+        dict_args = tuple("{}={}".format(key, kwargs[key]) for key in kwargs)
         print_d(
-            f"Caching result for {func_name}{args + dict_args}",
+            "Caching result for {}{}".format(func_name, args + dict_args),
         )
         result = func(*args, **kwargs)
         try:
@@ -730,7 +735,9 @@ def mediainfo(  # type: ignore[misc]
         pass
     if typ == StreamType.General:
         if len(typ_json_dicts) != 1:
-            raise AssertionError(f"Number of '{typ}' objects in '{path}' is not one")
+            raise AssertionError(
+                "Number of '{}' objects in '{}' is not one".format(typ, path)
+            )
 
     valid_prop_names = [
         enm.name
@@ -878,8 +885,8 @@ def print_d(
 
     if verbosity_limit > CLI_STATE.verbosity:
         return
-    d_str = f"{GAP}  {D_STRING}"
-    blank = " " * (len(d_str) - 2) + f"{D_STRING[2:]}"
+    d_str = GAP + "  " + D_STRING
+    blank = " " * (len(d_str) - 2) + D_STRING[2:]
     result = write_to_width(
         " ".join(map(str, args)), init_gap=d_str, subs_gap=blank, delim="\n"
     )
@@ -888,7 +895,7 @@ def print_d(
         color_val = color.value
     color_prefix = 4 if inv else 3
     bold_code = 1 if bold else 0
-    escape_code = f"[{bold_code};{color_prefix}{color_val}m"
+    escape_code = "[{};{}{}m".format(bold_code, color_prefix, color_val)
     return_code = "[0m"
     new_result = []
     next_escape = escape_code
@@ -973,12 +980,12 @@ def color_text(
     color_val = color.value
     color_prefix = 4 if inv else 3
     bold_code = 1 if bold else 0
-    escape_code = f"[{bold_code};{color_prefix}{color_val}m"
+    escape_code = "[{};{}{}m".format(bold_code, color_prefix, color_val)
     return_code = "[0m"
     # Replace all end escape codes (^[[0m) in the original string
     # with a new color following them (^[[0m^[[...), unless they
     # end the string or are already followed by a color
-    colors_preserved = re.sub("\[0m(?!|$)", f"[0m{escape_code}", string)
+    colors_preserved = re.sub("\\[0m(?!|$)", "[0m" + escape_code, string)
     return escape_code + colors_preserved + return_code
 
 
@@ -1164,7 +1171,7 @@ def get_converted_name(path: p.Path) -> p.Path:
     if path.suffix not in CLI_STATE.container.valid_exts():
         return path.with_suffix(output_ext)
     else:
-        return path.with_suffix(f".{COLLISION_SUFFIX}{path.suffix}")
+        return path.with_suffix("." + COLLISION_SUFFIX + path.suffix)
 
 
 def is_skip_codec(path: p.Path) -> bool:
@@ -1197,7 +1204,7 @@ def is_already_converted(path: p.Path) -> bool:
     try:
         container = gen_json[StreamProperty.Format]
     except KeyError:
-        raise (ValueError(f"File {path} doesn't look like a video file"))
+        raise (ValueError("File {} doesn't look like a video file".format(path)))
     if container != CLI_STATE.container.json_name():
         return False
     vid_jsons = mediainfo(path, typ=StreamType.Video)
@@ -1360,13 +1367,15 @@ def generate_conversions(
         num_frames *= 2
         if not more_frames:
             print_to_width(
-                f"Calculated stream indexes ({len(all_stream_ixs)}) for type '{typ}' do not match the mediainfo output({len(mediainfo(path, typ=typ))})",
+                "Calculated stream indexes ({}) for type '{}' do not match the mediainfo output({})".format(
+                    len(all_stream_ixs), typ, len(mediainfo(path, typ=typ))
+                ),
                 init_gap=2 * GAP,
                 subs_gap=2 * GAP,
             )
         sys.stdout.write(
             write_to_width(
-                f"Searching {num_frames} for streams -> ",
+                "Searching {} for streams -> ".format(num_frames),
                 init_gap=2 * GAP,
                 subs_gap=2 * GAP,
             )
@@ -1547,12 +1556,12 @@ def process_vidlist(
         )
         dir_prefix = "Dir: "
         print_to_width(
-            f"{dir_prefix}{cur_path.parent}",
+            "{}{}".format(dir_prefix, cur_path.parent),
             subs_gap=GAP + "".join(" " for _ in dir_prefix),
         )
         new_file_prefix = "New file: "
         print_to_width(
-            f"{new_file_prefix}{new_path}",
+            "{}{}".format(new_file_prefix, new_path),
             subs_gap=GAP + "".join(" " for _ in new_file_prefix),
             delim="\\ \n",
         )
@@ -1677,9 +1686,9 @@ def process_vidlist(
 def human_readable(num: float, suffix: str = "B") -> str:
     for unit in ("", "Ki", "Mi", "Gi", "Ti", "Pi", "Ei", "Zi"):
         if abs(num) < 1024.0:
-            return f"{num:3.1f}{unit}{suffix}"
+            return "{:3.1f}{}{}".format(num, unit, suffix)
         num /= 1024.0
-    return f"{num:.1f}Yi{suffix}"
+    return "{:.1f}Yi{}".format(num, suffix)
 
 
 def find_compression_ratio(f1: p.Path, f2: p.Path) -> float:
