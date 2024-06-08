@@ -680,7 +680,7 @@ def cache_choice(
             print_d(type(func_name))
             print_d(arg_tuple + kwarg_pairs)
 
-            print_d("=================================")
+            print_d("=" * shutil.get_terminal_size().columns, init_gap="")
 
             return result
 
@@ -1677,6 +1677,11 @@ def process_vidlist(
         format_string = "({:" + f"{limit_digits}d" + "}/{:d}) Processing {}"
 
         progress_string = format_string.format(num_processed + 1, limit, cur_path.name)
+
+        sep_char = "=" if first_sep else "-"
+        first_sep = False
+        print_to_width(sep_char * shutil.get_terminal_size().columns, init_gap="")
+        shutil.get_terminal_size().columns
 
         print_to_width(
             progress_string,
