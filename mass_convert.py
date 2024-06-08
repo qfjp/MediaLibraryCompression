@@ -59,6 +59,9 @@ class VidContainer(Enum):
     def json_name(self) -> str:
         return self._medianfo_container_names.value[self.value]  # type: ignore[attr-defined, no-any-return]
 
+    def __str__(self) -> str:
+        return self.name
+
 
 class CliState:
     """
