@@ -45,6 +45,11 @@ CURRENT_CONVERT = p.Path("")
 CURRENT_OBJECT = p.Path("")
 VERIFIED_TRANSCODES = []
 
+
+class MediainfoException(Exception):
+    pass
+
+
 @unique
 class VidContainer(Enum):
     Matroska = auto()
@@ -804,16 +809,34 @@ def mediainfo(  # type: ignore[misc]
     mediainfo_err = proc_out.stderr
     if mediainfo_err:
         raise RuntimeError(mediainfo_err)
+
+    def mediainfo_failure(path: p.Path) -> None:
+        width = shutil.get_terminal_size().columns
+        num_spacer_chars = width - len(str(path))
+        spacer_char = "="
+        spacer = "{}{}{}".format(
+            spacer_char * (num_spacer_chars // 2),
+            path,
+            spacer_char * (num_spacer_chars // 2),
+        )
+        if len(spacer) < width:
+            spacer = spacer_char + spacer
+        # print_to_width("========================={}=================".format(path), init_gap="")
+        print_to_width(spacer, init_gap="")
+        print_to_width("Full JSON Found", init_gap="")
+        print_to_width(mediainfo_out.decode("utf-8"), init_gap="")
+        raise MediainfoException()
+
+        ## Force the list to keep building
+        #fake_out: dict[StreamProperty, str] = dict()
+        #return [fake_out]
+
     try:
         file_json = json.loads(mediainfo_out)["media"]["track"]
+    except json.decoder.JSONDecodeError:
+        mediainfo_failure(path)
     except TypeError:
-        print(f"========================={path}=================")
-        print("Full JSON Found")
-        print(mediainfo_out.decode("utf-8"))
-
-        # Force the list to keep building
-        fake_out: dict[StreamProperty, str] = dict()
-        return [fake_out]
+        mediainfo_failure(path)
 
     if typ is None:
         return [file_json]
@@ -1676,6 +1699,15 @@ def process_vidlist(
         # Because the size of the vidlist is iffy
         if num_processed >= limit:
             return total_size_saved
+
+        try:
+            mediainfo(cur_path)
+        except MediainfoException:
+            print_to_width(
+                "mediainfo failed for '{}', continuing".format(file), init_gap=""
+            )
+            vidlist.remove(cur_path)
+            continue
 
         if not is_video_container(cur_path):
             continue
