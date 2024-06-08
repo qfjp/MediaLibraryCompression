@@ -1,4 +1,5 @@
 #!/bin/python
+import traceback
 import argparse as ap
 import datetime
 import grp
@@ -9,6 +10,7 @@ import pathlib as p
 import pwd
 import re
 import shutil
+import signal
 import subprocess as s
 import sys
 import types
@@ -35,6 +37,12 @@ from overrides import overrides
 
 os.nice(10)
 
+TURN_OFF_MAIN = False
+# For when we quit unexpectedly
+TOTAL_SAVED = 0
+TIME_START = datetime.datetime.now()
+CURRENT_CONVERT = p.Path("")
+CURRENT_OBJECT = p.Path("")
 VERIFIED_TRANSCODES = []
 
 @unique
@@ -1629,6 +1637,9 @@ def process_vidlist(
     just_list: bool = False,
     dry_run: bool = False,
 ) -> float:
+    global TOTAL_SAVED
+    global CURRENT_CONVERT
+    global CURRENT_OBJECT
     total_size_saved = 0
     limit = len(vidlist) if mayb_limit is None else min(len(vidlist), mayb_limit)
     exact_limit = 0
@@ -1648,6 +1659,8 @@ def process_vidlist(
 
     num_processed = 0
     for cur_path in vidlist:
+        CURRENT_CONVERT = p.Path("")
+        CURRENT_OBJECT = p.Path("")
         # Because the size of the vidlist is iffy
         if num_processed >= limit:
             return total_size_saved
@@ -1729,6 +1742,8 @@ def process_vidlist(
             num_processed += 1
             continue
 
+        CURRENT_OBJECT = cur_path
+        CURRENT_CONVERT = new_path
         before = datetime.datetime.now()
         ffmpeg_return_code = ffpb.main(argv=ffmpeg_proc_str[1:], stream=sys.stderr)
         if ffmpeg_return_code != 0:
@@ -1749,6 +1764,8 @@ def process_vidlist(
             new_size = os.path.getsize(new_path)
             diff_size = old_size - new_size
             total_size_saved += diff_size
+            TOTAL_SAVED += diff_size
+
             compression = find_compression_ratio(cur_path, new_path)
 
             signal_notify(
@@ -1845,6 +1862,7 @@ def find_compression_ratio(f1: p.Path, f2: p.Path) -> float:
 
 
 def main() -> None:
+    global TIME_START
     # Retrieve the program state from arguments
     exact = CLI_STATE.exact
     just_list = CLI_STATE.list_files
@@ -1890,6 +1908,7 @@ def main() -> None:
 
     # Start the clock
     orig_time = datetime.datetime.now()
+    TIME_START = orig_time
 
     files_and_sizes: list[tuple[p.Path, int]] = [
         (file, os.path.getsize(file)) for file in vid_list
@@ -1906,7 +1925,8 @@ def main() -> None:
         keep_failures=keep_failures,
         dry_run=dry_run,
     )
-    total_time_taken = datetime.datetime.now() - orig_time
+    print_to_width("=" * shutil.get_terminal_size().columns, init_gap="")
+    total_time_taken = datetime.datetime.now() - TIME_START
 
     if just_list:
         print_d(GEN_CACHE, verbosity_limit=4)
@@ -1924,8 +1944,7 @@ def main() -> None:
     )
 
 
-if __name__ == "__main__":
-
+def setup_argparse() -> ap.ArgumentParser:
     def replace_space(string: str) -> str:
         while "  " in string:
             string = string.replace("  ", "")
@@ -2067,18 +2086,100 @@ This is automatically set to true if the number of files is smaller than 10""",
     parser.parse_args(namespace=CLI_STATE)
     if len(CLI_STATE.FILES) == 0:
         CLI_STATE.FILES.append(p.Path("."))
+    CLI_STATE.FILES = [file.absolute() for file in CLI_STATE.FILES]
 
     if CLI_STATE.user != os.environ["USER"]:
         CLI_STATE.uid = pwd.getpwnam(CLI_STATE.user).pw_uid
     if CLI_STATE.group != os.environ["USER"]:  # TODO: This is not the default used!
         CLI_STATE.gid = grp.getgrnam(CLI_STATE.group).gr_gid
+    return parser
 
-    main()
-    if VERIFIED_TRANSCODES:
-        print_to_width("~~~~~~~~~~~~~~~")
-        print_to_width("Okay to delete:")
-        for name in VERIFIED_TRANSCODES:
-            print_to_width(name)
+
+if __name__ == "__main__":
+
+    def handler(signum: int, frame: object) -> None:
+        out = sys.stdout
+        signame = signal.Signals(signum).name
+        out.write("Received {} ({})\n".format(signame, signum))
+        print_at_finish()
+        sys.exit(2)
+
+    def print_at_finish() -> None:
+        global TOTAL_SAVED
+        global TIME_START
+        global CURRENT_CONVERT
+        global CURRENT_OBJECT
+        out = sys.stdout
+        total_time_taken = datetime.datetime.now() - TIME_START
+
+        ## Maybe instead of 'possible', verify if the file is complete
+        # and if not, delete automatically (except if -f/--keep-failures)
+        if not CURRENT_CONVERT.is_dir() and CURRENT_CONVERT.exists():
+            os.remove(CURRENT_CONVERT)
+        print_to_width("=" * shutil.get_terminal_size().columns, init_gap="")
+        out.write(
+            write_to_width(
+                "Total (partial?) Savings:",
+                str(convert_bytes(TOTAL_SAVED)),
+                "(" + str(TOTAL_SAVED) + ")",
+            )
+        )
+        out.write("\n")
+        out.write(
+            write_to_width(
+                "Total (partial?) Time:",
+                write_timedelta(total_time_taken),
+                "(" + str(total_time_taken) + ")",
+            )
+        )
+        if VERIFIED_TRANSCODES:
+            print_to_width("Okay to delete:")
+            for name in VERIFIED_TRANSCODES:
+                print_to_width(name)
+        out.flush()
+        signal_notify("❌ Catastrophic Error!")
+
+    signal.signal(signal.SIGINT, handler)
+    signal.signal(signal.SIGPIPE, handler)
+    setup_argparse()
+    if not TURN_OFF_MAIN:
+        try:
+            main()
+        except Exception:
+            exc_info = sys.exc_info()
+            exc = "".join(
+                traceback.format_exception_only(*(sys.exc_info()[:-1]))
+            ).strip()
+            tb_lines = traceback.format_tb(sys.exc_info()[-1])
+            tb_lines = [
+                line
+                for split_line in [line.split("\n") for line in tb_lines]
+                for line in split_line
+            ]
+            tb_lines = tb_lines[:-1] if tb_lines[-1].strip() == "" else tb_lines
+
+            gap_width = 4
+            start_space_re = "^\\s*"
+            print_to_width("=" * shutil.get_terminal_size().columns, init_gap="")
+            print("Main Loop Failed")
+            sep = "~" * len(exc.strip())
+            print_to_width(sep)
+            print_to_width(exc)
+            print()
+            for line in tb_lines:
+                mayb_start_space = re.match(start_space_re, line)
+                start_space = (
+                    "" if mayb_start_space is None else mayb_start_space.group(0)
+                )
+                print_to_width("{}{}".format(start_space, line))
+            print_to_width(sep)
+            sys.exit(10)
+
+        if VERIFIED_TRANSCODES:
+            print_to_width("~~~~~~~~~~~~~~~")
+            print_to_width("Okay to delete:")
+            for name in VERIFIED_TRANSCODES:
+                print_to_width(name)
 
 
 def test_print_d_colors() -> None:
