@@ -1246,9 +1246,17 @@ def failed_tests(fname1: p.Path, fname2: p.Path) -> str:
       and :code:`fname2` do not match on.
     """
     results = verify_conversion_tests(fname1, fname2)
-    result_tups: list[
-        tuple[StreamType, StreamProperty, list[StreamPropSingleCompareResult]]
-    ] = [tup[1:] for tup in results if not tup[0]]
+
+    if [
+        json_prop
+        for json_props in [
+            mediainfo(fname2, x)
+            for x in [StreamType.Video, StreamType.Audio, StreamType.Text]
+        ]
+        for json_prop in json_props
+    ] == []:
+        return color_text("No valid stream properties.", TermColor.Red)
+
     pretty_results = "\n".join(
         tup[1].name
         + "."
@@ -1529,7 +1537,6 @@ def generate_conversions(
         type_ix = stream_ix - offset
         # TODO: Fix for when audio stream ix's > video's
         codec_id = codec_ids[type_ix]
-        encoding = None
         encoding = CODEC_ID_MAP[codec_id]
 
         encode_key = typ.ffprobe_ident()
