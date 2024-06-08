@@ -538,6 +538,7 @@ class StreamProperty(Enum):
         auto(),
     )
 
+    FileSize = (set([StreamType.General]), new_is_less, auto())
     Duration = (
         set([StreamType.General, StreamType.Video, StreamType.Audio]),
         new_is_more_fuzziest,
