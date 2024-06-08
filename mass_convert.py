@@ -38,7 +38,7 @@ os.nice(10)
 class VidContainer(Enum):
     Matroska = auto()
     MPEG_4 = auto()
-    _valid_exts = {MPEG_4: set([".mp4", ".mpv"]), Matroska: set([".mkv"])}
+    _valid_exts = {MPEG_4: set([".mp4", ".m4v"]), Matroska: set([".mkv"])}
     _output_exts = {MPEG_4: ".mp4", Matroska: ".mkv"}
     _medianfo_container_names = {MPEG_4: "MPEG-4", Matroska: "Matroska"}
 
