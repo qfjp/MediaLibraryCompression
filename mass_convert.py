@@ -412,8 +412,8 @@ def convert_bytes(bytes: float) -> str:
     while bytes % (1024**exp) < bytes:
         exp += 1
     exp -= 1
-    suffixes = ["", "K", "M", "G", "T", "P", "E", "Z", "Y"]
-    return "{:.2f} {}iB".format(bytes / (1024**exp), suffixes[exp])
+    suffixes = ["", "Ki", "Mi", "Gi", "Ti", "Pi", "Ei", "Zi", "Yi"]
+    return "{:.2f} {}B".format(bytes / (1024**exp), suffixes[exp])
 
 
 INT_TOLERANCE = 7
