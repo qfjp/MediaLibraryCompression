@@ -1133,11 +1133,15 @@ def compare_stream_property(
     olds = []
     news = []
     try:
-        olds = [x[0][key] for x in pairs]
+        # TODO: This will not keep the order between `news` and
+        # `olds`. Use a default if x[0][key] is not found (or x[1][key])
+        # olds = [x[0][key] for x in pairs if key in x[0]]
+        olds = [x[0][key] if key in x[0] else "" for x in pairs]
     except KeyError:
         olds = []
     try:
-        news = [x[1][key] for x in pairs]
+        # news = [x[1][key] for x in pairs if key in x[1]]
+        news = [x[1][key] if key in x[1] else "" for x in pairs]
     except KeyError:
         news = []
     try:
