@@ -1669,6 +1669,7 @@ def process_vidlist(
     limit_digits = len(f"{limit}")
 
     num_processed = 0
+    first_sep = True
     for cur_path in vidlist:
         CURRENT_CONVERT = p.Path("")
         CURRENT_OBJECT = p.Path("")
